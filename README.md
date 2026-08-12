@@ -167,12 +167,6 @@ curl -X POST \
 
 감사 로그 변경을 이벤트 스트림으로 수신합니다. 일반 API 인증 헤더를 사용합니다.
 
-### `GET /loco`
-
-KakaoTalk의 LOCO 송수신 패킷을 실시간에 가깝게 조회하는 웹 화면입니다. `GET /api/loco?limit=500`은 같은 데이터를 JSON 배열로 반환합니다. 송신은 실제 LOCO 소켓 쓰기 직전, 수신은 복호화된 응답 처리 경계에서 캡처되며 body는 KakaoTalk BSON 객체의 문자열 표현입니다. 송신 훅은 값을 기록한 뒤 원래 전송 함수를 그대로 호출하며 패킷 수정, 차단 또는 대리 전송을 하지 않습니다.
-
-브라우저에서 API 인증이 켜져 있다면 `/loco?token=API_TOKEN`으로 처음 접속할 수 있습니다. 토큰은 해당 브라우저 탭의 session storage에만 저장됩니다.
-
 ### Iris `POST /reply`
 
 `type` 기반 전송의 공개 호출 지점은 Iris입니다. `http://127.0.0.1:4000/internal/iris/reply`는 Iris 후킹 에이전트와 Noa 사이의 내부 브리지이므로 직접 호출하지 마십시오. Iris의 `/reply`로 들어온 요청 중 `NOA_IRIS_HOOK_TYPES`에 허용된 타입만 Noa가 가로채 처리합니다.
@@ -242,7 +236,6 @@ curl -X POST \
 | `NOA_IRIS_BRIDGE_URL` | 현재 Noa 포트의 `/internal/iris/reply` | Iris 브리지 URL |
 | `KAKAO_HOOK_ENABLED` | `true` | custom 발신 방식 선택 |
 | `NOA_CHATONROOM_INTERVAL_MS` | `10000` | 보유한 오픈채팅방을 순회하며 내부 CHATONROOM 함수를 호출하는 간격. `0`이면 비활성화 |
-| `NOA_LOCO_HISTORY_LIMIT` | `1000` | 메모리에 보관할 최근 LOCO 패킷 수. 100~10000 |
 | `NOA_DATA_DIR` | Android `/data/local/tmp/noa` | DB·로그·설정 디렉터리 |
 | `NOA_UPLOAD_DIR` | KakaoTalk 전용 업로드 경로 | 파일 임시 저장 경로 |
 | `NOA_KAKAO_PATH` | 자동 탐색 | KakaoTalk DB 경로 |
