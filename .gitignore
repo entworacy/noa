@@ -1,0 +1,15 @@
+/target
+/dist
+/data
+/.tools
+/ui-agent/build
+/kakao-agent/build
+/kakao-agent/target
+/iris-agent/build
+/iris-agent/target
+/.noa-device.env
+/.removed-noa-*
+/.idea
+*.log
+*.md
+!/README.md

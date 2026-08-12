@@ -1,0 +1,529 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+state_file="${NOA_ENV_FILE:-$project_dir/.noa-device.env}"
+tools_dir="$project_dir/.tools"
+iris_control_url="https://raw.githubusercontent.com/dolidolih/Iris/main/iris_control"
+release_base_url="https://github.com/entworacy/noa/releases"
+iris_default_port="3000"
+remote_noa="/data/local/tmp/noa-bin"
+remote_noa_staging="/data/local/tmp/noa-bin.install"
+
+usage() {
+  printf '%s\n' \
+    '사용법:' \
+    '  scripts/iris-noa environment [--iris-control PATH]' \
+    '  scripts/iris-noa install [옵션]' \
+    '  scripts/iris-noa start' \
+    '  scripts/iris-noa up' \
+    '  scripts/iris-noa status' \
+    '  scripts/iris-noa stop' \
+    '' \
+    'install 옵션:' \
+    '  --serial SERIAL' \
+    '  --iris-control PATH' \
+    '  --release-version VERSION' \
+    '  --noa-binary PATH (로컬 바이너리 사용)' \
+    '  --bind ADDRESS:PORT' \
+    '  --api-token TOKEN' \
+    '  --kakao-hook-enabled true|false' \
+    '  --hook-types file,markdown,custom'
+}
+
+fail() {
+  printf '[noa] %s\n' "$1" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 명령이 필요합니다."
+}
+
+absolute_path() {
+  local input="$1"
+  local directory
+  local name
+  directory="$(cd "$(dirname "$input")" && pwd)"
+  name="$(basename "$input")"
+  printf '%s/%s\n' "$directory" "$name"
+}
+
+validate_serial() {
+  [[ "$1" =~ ^[A-Za-z0-9._:-]+$ ]] || fail "ADB serial 형식이 올바르지 않습니다."
+}
+
+validate_bind() {
+  [[ "$1" =~ ^[A-Za-z0-9._:-]+:[0-9]+$ ]] || fail "bind 값은 ADDRESS:PORT 형식이어야 합니다."
+}
+
+validate_token() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]{8,}$ ]] || fail "API token은 8자 이상의 영문, 숫자, 점, 밑줄, 하이픈만 사용할 수 있습니다."
+}
+
+validate_hook_types() {
+  [[ "$1" == "file,markdown,custom" ]] || fail "hook type은 file,markdown,custom만 지원합니다."
+}
+
+normalize_boolean() {
+  case "${1,,}" in
+    1|true|yes|on) printf '%s\n' 'true' ;;
+    0|false|no|off) printf '%s\n' 'false' ;;
+    *) fail "boolean 값은 true 또는 false여야 합니다: $1" ;;
+  esac
+}
+
+validate_release_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || fail "릴리스 버전 형식이 올바르지 않습니다: $1"
+}
+
+select_device() {
+  local requested="$1"
+  local line
+  local devices=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && devices+=("$line")
+  done < <(adb devices | awk '$2 == "device" { print $1 }')
+  if [[ -n "$requested" ]]; then
+    validate_serial "$requested"
+    for line in "${devices[@]}"; do
+      if [[ "$line" == "$requested" ]]; then
+        printf '%s\n' "$requested"
+        return
+      fi
+    done
+    fail "연결된 기기에서 $requested 을 찾지 못했습니다."
+  fi
+  if [[ "${#devices[@]}" -eq 0 ]]; then
+    fail "device 상태의 ADB 기기가 없습니다."
+  fi
+  if [[ "${#devices[@]}" -ne 1 ]]; then
+    printf '[noa] 연결된 기기:' >&2
+    printf ' %s' "${devices[@]}" >&2
+    printf '\n' >&2
+    fail "--serial로 설치할 기기를 지정하세요."
+  fi
+  validate_serial "${devices[0]}"
+  printf '%s\n' "${devices[0]}"
+}
+
+adb_run() {
+  adb -s "$NOA_DEVICE_SERIAL" "$@"
+}
+
+verify_device() {
+  local status
+  status="$(adb devices | awk -v serial="$NOA_DEVICE_SERIAL" '$1 == serial { print $2 }')"
+  [[ "$status" == "device" ]] || fail "$NOA_DEVICE_SERIAL 기기가 연결되어 있지 않습니다."
+}
+
+verify_root() {
+  adb_run shell "su root sh -c 'id -u'" | tr -d '\r' | tail -n 1 | grep -qx '0' || fail "기기에서 su root 권한을 얻지 못했습니다."
+}
+
+abi_value() {
+  case "$1" in
+    arm64-v8a) printf '%s\n' 'arm64-v8a' ;;
+    armeabi-v7a|armeabi) printf '%s\n' 'armeabi-v7a' ;;
+    x86) printf '%s\n' 'x86' ;;
+    x86_64) printf '%s\n' 'x86_64' ;;
+    *) fail "지원하지 않는 Android ABI입니다: $1" ;;
+  esac
+}
+
+resolve_release_version() {
+  local requested="$1"
+  local effective
+  local tag
+  local version
+  if [[ -n "$requested" ]]; then
+    version="${requested#v}"
+    validate_release_version "$version"
+    printf '%s\n' "$version"
+    return
+  fi
+  effective="$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' "$release_base_url/latest")"
+  tag="${effective%/}"
+  tag="${tag##*/}"
+  [[ "$tag" == v* ]] || fail "최신 릴리스 태그를 확인하지 못했습니다: $effective"
+  version="${tag#v}"
+  validate_release_version "$version"
+  printf '%s\n' "$version"
+}
+
+prepare_noa_release() {
+  local abi="$1"
+  local version="$2"
+  local tag="v$version"
+  local directory="$tools_dir/releases/$version"
+  local artifact="noa-$version-android-$abi"
+  local binary="$directory/$artifact"
+  local checksum="$directory/SHA256SUMS"
+  local checksum_download="$checksum.download"
+  local binary_download="$binary.download"
+  local expected
+  local actual
+  mkdir -p "$directory"
+  printf '[noa] 릴리스 체크섬 확인: %s\n' "$tag" >&2
+  curl -fsSL --retry 3 -o "$checksum_download" "$release_base_url/download/$tag/SHA256SUMS"
+  mv "$checksum_download" "$checksum"
+  expected="$(awk -v artifact="$artifact" '$2 == artifact || $2 == "*" artifact { print $1; exit }' "$checksum")"
+  [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "$artifact 체크섬을 릴리스에서 찾지 못했습니다."
+  expected="${expected,,}"
+  if [[ -f "$binary" ]]; then
+    actual="$(sha256sum "$binary" | awk '{ print $1 }')"
+    if [[ "$actual" == "$expected" ]]; then
+      chmod 755 "$binary"
+      printf '[noa] 검증된 릴리스 바이너리 재사용: %s\n' "$artifact" >&2
+      printf '%s\n' "$binary"
+      return
+    fi
+  fi
+  printf '[noa] 릴리스 바이너리 다운로드: %s\n' "$artifact" >&2
+  curl -fL --retry 3 -o "$binary_download" "$release_base_url/download/$tag/$artifact"
+  actual="$(sha256sum "$binary_download" | awk '{ print $1 }')"
+  [[ "$actual" == "$expected" ]] || fail "$artifact SHA-256 검증에 실패했습니다."
+  chmod 755 "$binary_download"
+  mv "$binary_download" "$binary"
+  printf '%s\n' "$binary"
+}
+
+prepare_iris_control() {
+  local supplied="$1"
+  local temporary
+  mkdir -p "$tools_dir"
+  if [[ -n "$supplied" ]]; then
+    [[ -f "$supplied" ]] || fail "iris_control을 찾지 못했습니다: $supplied"
+    NOA_IRIS_CONTROL="$(absolute_path "$supplied")"
+    return
+  fi
+  need curl
+  temporary="$tools_dir/iris_control.download"
+  curl -fL --retry 3 -o "$temporary" "$iris_control_url"
+  chmod 755 "$temporary"
+  mv "$temporary" "$tools_dir/iris_control"
+  NOA_IRIS_CONTROL="$tools_dir/iris_control"
+}
+
+run_iris_control() {
+  local action="$1"
+  local temporary
+  local shim
+  local real_adb
+  local result
+  real_adb="$(command -v adb)"
+  temporary="$(mktemp -d "${TMPDIR:-/tmp}/noa-iris.XXXXXX")"
+  shim="$temporary/bin"
+  mkdir -p "$shim" "$temporary/work"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1:-}" == "devices" ]]; then' \
+    '  printf "List of devices attached\\n%s\\tdevice\\n" "$NOA_DEVICE_SERIAL"' \
+    '  exit 0' \
+    'fi' \
+    'exec "$NOA_REAL_ADB" "$@"' > "$shim/adb"
+  chmod 755 "$shim/adb"
+  if (
+    cd "$temporary/work"
+    PATH="$shim:$PATH" NOA_REAL_ADB="$real_adb" NOA_DEVICE_SERIAL="$NOA_DEVICE_SERIAL" bash "$NOA_IRIS_CONTROL" "$action"
+  ); then
+    result=0
+  else
+    result=$?
+  fi
+  rm -rf -- "$temporary"
+  return "$result"
+}
+
+run_iris_environment() {
+  local temporary
+  local result
+  temporary="$(mktemp -d "${TMPDIR:-/tmp}/noa-redroid.XXXXXX")"
+  if (
+    cd "$temporary"
+    bash "$NOA_IRIS_CONTROL" install_redroid
+  ); then
+    result=0
+  else
+    result=$?
+  fi
+  rm -rf -- "$temporary"
+  return "$result"
+}
+
+verify_environment_host() {
+  local distribution
+  local release
+  local major
+  need lsb_release
+  need sudo
+  distribution="$(lsb_release -is)"
+  release="$(lsb_release -rs)"
+  major="${release%%.*}"
+  [[ "$distribution" == "Ubuntu" ]] || fail "Redroid 자동 환경 조성은 Ubuntu에서만 지원합니다: $distribution $release"
+  [[ "$major" =~ ^[0-9]+$ ]] || fail "Ubuntu 버전을 확인하지 못했습니다: $release"
+  [[ "$major" -ge 22 ]] || fail "Ubuntu 22 이상이 필요합니다: $release"
+}
+
+verify_redroid_environment() {
+  local running
+  need docker
+  running="$(sudo docker inspect --format '{{.State.Running}}' redroid 2>/dev/null || true)"
+  [[ "$running" == "true" ]] || fail "iris_control 실행 후 redroid 컨테이너가 실행 상태가 아닙니다."
+}
+
+save_state() {
+  local directory
+  local temporary
+  directory="$(dirname "$state_file")"
+  mkdir -p "$directory"
+  temporary="$state_file.tmp"
+  umask 077
+  {
+    printf 'NOA_DEVICE_SERIAL=%q\n' "$NOA_DEVICE_SERIAL"
+    printf 'NOA_DEVICE_ABI=%q\n' "$NOA_DEVICE_ABI"
+    printf 'NOA_RELEASE_VERSION=%q\n' "$NOA_RELEASE_VERSION"
+    printf 'NOA_IRIS_CONTROL=%q\n' "$NOA_IRIS_CONTROL"
+    printf 'NOA_BIND_ADDRESS=%q\n' "$NOA_BIND_ADDRESS"
+    printf 'NOA_ACCESS_TOKEN=%q\n' "$NOA_ACCESS_TOKEN"
+    printf 'NOA_HOOK_TYPE_LIST=%q\n' "$NOA_HOOK_TYPE_LIST"
+    printf 'NOA_KAKAO_HOOK_ENABLED=%q\n' "$NOA_KAKAO_HOOK_ENABLED"
+    printf 'NOA_REMOTE_BIN=%q\n' "$NOA_REMOTE_BIN"
+  } > "$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$state_file"
+}
+
+load_state() {
+  [[ -f "$state_file" ]] || fail "설치 정보가 없습니다. 먼저 scripts/iris-noa install을 실행하세요."
+  set -a
+  source "$state_file"
+  set +a
+  : "${NOA_DEVICE_SERIAL:?}"
+  : "${NOA_DEVICE_ABI:?}"
+  NOA_RELEASE_VERSION="${NOA_RELEASE_VERSION:-unknown}"
+  : "${NOA_IRIS_CONTROL:?}"
+  : "${NOA_BIND_ADDRESS:?}"
+  : "${NOA_ACCESS_TOKEN:?}"
+  : "${NOA_HOOK_TYPE_LIST:?}"
+  NOA_KAKAO_HOOK_ENABLED="$(normalize_boolean "${NOA_KAKAO_HOOK_ENABLED:-true}")"
+  : "${NOA_REMOTE_BIN:?}"
+  validate_serial "$NOA_DEVICE_SERIAL"
+  validate_bind "$NOA_BIND_ADDRESS"
+  validate_token "$NOA_ACCESS_TOKEN"
+  validate_hook_types "$NOA_HOOK_TYPE_LIST"
+  [[ -f "$NOA_IRIS_CONTROL" ]] || fail "저장된 iris_control을 찾지 못했습니다. 다시 설치하세요."
+}
+
+remote_pid() {
+  local name="$1"
+  adb_run shell "su root sh -c 'pidof $name'" 2>/dev/null | tr -d '\r\n' || true
+}
+
+iris_installed() {
+  adb_run shell "su root sh -c 'test -s /data/local/tmp/Iris.apk'" >/dev/null 2>&1
+}
+
+ensure_forward() {
+  local port="$1"
+  if adb_run forward --list | tr -d '\r' | grep -Fqx "$NOA_DEVICE_SERIAL tcp:$port tcp:$port"; then
+    return
+  fi
+  adb_run forward "tcp:$port" "tcp:$port" >/dev/null
+}
+
+environment_command() {
+  local supplied_control=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --iris-control)
+        [[ "$#" -ge 2 ]] || fail "$1 값이 필요합니다."
+        supplied_control="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *) fail "알 수 없는 environment 옵션입니다: $1" ;;
+    esac
+  done
+  verify_environment_host
+  prepare_iris_control "$supplied_control"
+  run_iris_environment
+  verify_redroid_environment
+  printf '[noa] Redroid 환경이 준비되었습니다.\n'
+  printf '[noa] 다음 단계: adb connect 127.0.0.1:5555\n'
+  printf '[noa] 연결 후: scripts/iris-noa install --serial 127.0.0.1:5555\n'
+}
+
+install_command() {
+  local serial=""
+  local supplied_control=""
+  local supplied_noa=""
+  local requested_release=""
+  local bind_address="0.0.0.0:4000"
+  local access_token=""
+  local hook_types="file,markdown,custom"
+  local kakao_hook_enabled="true"
+  local device_abi
+  local binary_abi
+  local noa_binary
+  local installed_release
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --serial|--iris-control|--release-version|--noa-binary|--bind|--api-token|--hook-types|--kakao-hook-enabled)
+        [[ "$#" -ge 2 ]] || fail "$1 값이 필요합니다."
+        case "$1" in
+          --serial) serial="$2" ;;
+          --iris-control) supplied_control="$2" ;;
+          --release-version) requested_release="$2" ;;
+          --noa-binary) supplied_noa="$2" ;;
+          --bind) bind_address="$2" ;;
+          --api-token) access_token="$2" ;;
+          --hook-types) hook_types="$2" ;;
+          --kakao-hook-enabled) kakao_hook_enabled="$2" ;;
+        esac
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *) fail "알 수 없는 install 옵션입니다: $1" ;;
+    esac
+  done
+  need adb
+  need awk
+  need grep
+  need python3
+  need tail
+  [[ -z "$supplied_noa" || -z "$requested_release" ]] || fail "--release-version과 --noa-binary는 함께 사용할 수 없습니다."
+  NOA_DEVICE_SERIAL="$(select_device "$serial")"
+  verify_device
+  verify_root
+  device_abi="$(adb_run shell getprop ro.product.cpu.abi | tr -d '\r\n')"
+  binary_abi="$(abi_value "$device_abi")"
+  if [[ -n "$supplied_noa" ]]; then
+    noa_binary="$supplied_noa"
+    installed_release="local"
+  else
+    need curl
+    need sha256sum
+    installed_release="$(resolve_release_version "$requested_release")"
+    noa_binary="$(prepare_noa_release "$binary_abi" "$installed_release")"
+  fi
+  [[ -f "$noa_binary" ]] || fail "Noa 바이너리를 찾지 못했습니다: $noa_binary"
+  noa_binary="$(absolute_path "$noa_binary")"
+  validate_bind "$bind_address"
+  [[ "${bind_address##*:}" != "$iris_default_port" ]] || fail "$iris_default_port 포트는 Iris 기본 포트이므로 Noa bind로 지정할 수 없습니다."
+  validate_hook_types "$hook_types"
+  kakao_hook_enabled="$(normalize_boolean "$kakao_hook_enabled")"
+  if [[ -z "$access_token" ]]; then
+    access_token="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+  fi
+  validate_token "$access_token"
+  prepare_iris_control "$supplied_control"
+  if iris_installed; then
+    printf '[noa] 기존 Iris 설치를 유지합니다: /data/local/tmp/Iris.apk\n'
+  else
+    run_iris_control install
+  fi
+  stop_process noa-bin
+  adb_run push "$noa_binary" "$remote_noa_staging"
+  adb_run shell "su root sh -c 'mkdir -p /data/local/tmp/noa /sdcard/Android/data/com.kakao.talk/files/noa/uploads && chmod 755 $remote_noa_staging && mv $remote_noa_staging $remote_noa && chmod 700 /data/local/tmp/noa'"
+  NOA_DEVICE_ABI="$device_abi"
+  NOA_RELEASE_VERSION="$installed_release"
+  NOA_BIND_ADDRESS="$bind_address"
+  NOA_ACCESS_TOKEN="$access_token"
+  NOA_HOOK_TYPE_LIST="$hook_types"
+  NOA_KAKAO_HOOK_ENABLED="$kakao_hook_enabled"
+  NOA_REMOTE_BIN="$remote_noa"
+  save_state
+  printf '[noa] 설치 완료: device=%s abi=%s release=%s\n' "$NOA_DEVICE_SERIAL" "$NOA_DEVICE_ABI" "$NOA_RELEASE_VERSION"
+  printf '[noa] API token: %s\n' "$NOA_ACCESS_TOKEN"
+  printf '[noa] 실행: scripts/iris-noa up\n'
+}
+
+start_command() {
+  local port
+  local noa_pid
+  local chatonroom_interval
+  local loco_history_limit
+  load_state
+  need adb
+  verify_device
+  verify_root
+  chatonroom_interval="${NOA_CHATONROOM_INTERVAL_MS:-10000}"
+  loco_history_limit="${NOA_LOCO_HISTORY_LIMIT:-1000}"
+  [[ "$chatonroom_interval" =~ ^[0-9]+$ ]] || fail "NOA_CHATONROOM_INTERVAL_MS는 0 이상의 정수여야 합니다."
+  [[ "$loco_history_limit" =~ ^[0-9]+$ ]] || fail "NOA_LOCO_HISTORY_LIMIT는 0 이상의 정수여야 합니다."
+  run_iris_control start
+  noa_pid="$(remote_pid noa-bin)"
+  if [[ -z "$noa_pid" ]]; then
+    adb_run shell "su root sh -c 'nohup env NOA_IRIS_HOOK=true KAKAO_HOOK_ENABLED=$NOA_KAKAO_HOOK_ENABLED NOA_CHATONROOM_INTERVAL_MS=$chatonroom_interval NOA_LOCO_HISTORY_LIMIT=$loco_history_limit NOA_BIND=$NOA_BIND_ADDRESS NOA_API_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TYPES=$NOA_HOOK_TYPE_LIST $NOA_REMOTE_BIN >/data/local/tmp/noa.log 2>&1 &'"
+  fi
+  port="${NOA_BIND_ADDRESS##*:}"
+  ensure_forward "$port"
+  sleep 1
+  noa_pid="$(remote_pid noa-bin)"
+  [[ -n "$noa_pid" ]] || fail "Noa가 시작되지 않았습니다. /data/local/tmp/noa.log를 확인하세요."
+  printf '[noa] Iris와 Noa가 실행 중입니다.\n'
+  printf '[noa] 대시보드: http://127.0.0.1:%s/\n' "$port"
+}
+
+status_command() {
+  local noa_pid
+  local port
+  load_state
+  need adb
+  verify_device
+  run_iris_control status
+  noa_pid="$(remote_pid noa-bin)"
+  printf '[noa] Release: %s\n' "$NOA_RELEASE_VERSION"
+  printf '[noa] Noa: %s\n' "${noa_pid:-stopped}"
+  printf '[noa] Kakao hook: %s\n' "$NOA_KAKAO_HOOK_ENABLED"
+  port="${NOA_BIND_ADDRESS##*:}"
+  if [[ -n "$noa_pid" ]]; then
+    ensure_forward "$port"
+    printf '[noa] 대시보드: http://127.0.0.1:%s/\n' "$port"
+  fi
+}
+
+stop_process() {
+  local name="$1"
+  local pid
+  pid="$(remote_pid "$name")"
+  if [[ -n "$pid" ]]; then
+    [[ "$pid" =~ ^[0-9[:space:]]+$ ]] || fail "$name PID 응답이 올바르지 않습니다."
+    adb_run shell "su root sh -c 'kill -9 $pid'"
+  fi
+}
+
+stop_command() {
+  load_state
+  need adb
+  verify_device
+  verify_root
+  stop_process noa-bin
+  run_iris_control stop
+  printf '[noa] Iris와 Noa를 중지했습니다.\n'
+}
+
+command_name="${1:-}"
+if [[ -z "$command_name" ]]; then
+  usage
+  exit 1
+fi
+shift
+case "$command_name" in
+  environment) environment_command "$@" ;;
+  install) install_command "$@" ;;
+  start) [[ "$#" -eq 0 ]] || fail "start에는 옵션이 없습니다."; start_command ;;
+  up) [[ "$#" -eq 0 ]] || fail "up에는 옵션이 없습니다."; start_command ;;
+  status) [[ "$#" -eq 0 ]] || fail "status에는 옵션이 없습니다."; status_command ;;
+  stop) [[ "$#" -eq 0 ]] || fail "stop에는 옵션이 없습니다."; stop_command ;;
+  -h|--help|help) usage ;;
+  *) usage; fail "알 수 없는 명령입니다: $command_name" ;;
+esac

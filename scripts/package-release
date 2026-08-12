@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="${1:-$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | head -n 1)}"
+output_dir="${2:-$project_dir/dist/releases}"
+abis=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
+artifacts=()
+
+command -v sha256sum >/dev/null 2>&1 || {
+  printf 'sha256sum 명령이 필요합니다.\n' >&2
+  exit 1
+}
+
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || {
+  printf '릴리스 버전이 올바르지 않습니다: %s\n' "$version" >&2
+  exit 1
+}
+
+mkdir -p "$output_dir"
+
+for abi in "${abis[@]}"; do
+  binary="$project_dir/dist/noa-$abi"
+  artifact="noa-$version-android-$abi"
+  legacy_archive="$output_dir/$artifact.tar.xz"
+  [[ -f "$binary" ]] || {
+    printf 'Android 바이너리를 찾지 못했습니다: %s\n' "$binary" >&2
+    exit 1
+  }
+  rm -f "$legacy_archive"
+  cp "$binary" "$output_dir/$artifact"
+  chmod 755 "$output_dir/$artifact"
+  artifacts+=("$artifact")
+done
+
+(
+  cd "$output_dir"
+  sha256sum "${artifacts[@]}" > SHA256SUMS
+)
+
+printf '릴리스 바이너리가 생성되었습니다: %s\n' "$output_dir"
