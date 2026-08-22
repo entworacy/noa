@@ -85,7 +85,9 @@ impl RuntimeVm {
         };
         let mut vm_pointer = ptr::null_mut();
         let mut environment_pointer = ptr::null_mut();
-        let constructor: VmConstructor = unsafe { runtime.require(c"JNI_CreateJavaVM") }?;
+        let invocation = unsafe { SharedObject::acquire(c"libnativehelper.so") }
+            .map_err(|error| format!("JNI 호출 계층 로드 실패: {error}"))?;
+        let constructor: VmConstructor = unsafe { invocation.require(c"JNI_CreateJavaVM") }?;
         let status =
             unsafe { constructor(&mut vm_pointer, &mut environment_pointer, &mut options) };
         if status != JNI_OK || vm_pointer.is_null() || environment_pointer.is_null() {
