@@ -1,0 +1,24 @@
+noa
+Copyright 2026 noa contributors
+
+This product contains Android/KakaoTalk interoperability code informed by:
+
+Iris (https://github.com/dolidolih/Iris)
+   Used as a behavioral and schema reference for KakaoTalk DB observation,
+   notification reply, and image share flows. Iris contains MIT-licensed code
+   and a specifically identified GPL-3.0 NotificationPoller file. noa does not
+   include that NotificationPoller implementation or other GPL source.
+
+The noa source layout, internal identifiers, control flow, Actix API, asset
+pipeline, audit archive, presence reconciliation, and dashboard are original
+implementations. Platform ABI names and KakaoTalk protocol identifiers retain
+their externally required spelling.
+
+This product embeds unmodified LSPlant standalone libraries from LSPosed
+(https://github.com/LSPosed/LSPlant), licensed under LGPL-3.0. Noa loads the
+library dynamically in the target process. The license texts are provided in
+licenses/LSPLANT-LGPL-3.0 and licenses/GPL-3.0.
+
+This product embeds Frida Core and Frida Gum from Frida
+(https://github.com/frida/frida). Its license notice is provided in
+licenses/FRIDA.
