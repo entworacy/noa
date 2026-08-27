@@ -1,5 +1,9 @@
 # noa
 
+<p align="center">
+  <img src="assets/noa-cover.jpg" alt="Noa KakaoTalk illustration" width="480">
+</p>
+
 Noa는 루팅된 Android 또는 Redroid에서 KakaoTalk 채팅방을 조회하고 메시지·파일 전송, 오픈채팅 관리, 참여자 변경 감사를 제공하는 Android 네이티브 서비스입니다. ARM64, ARMv7, x86, x86_64를 지원합니다.
 
 > **주의:** Noa는 KakaoTalk 내부 데이터베이스, 비공개 API와 프로세스 후킹을 사용하며 KakaoTalk 운영정책 또는 이용약관에 위배될 수 있습니다. 사용 과정에서 계정 정지, 서비스 이용 제한, 데이터 손상이나 기타 불이익이 발생할 수 있으므로 본인이 소유하고 관리할 권한이 있는 테스트 환경에서만 사용하십시오. 관련 정책과 법령을 확인하고 준수할 책임 및 사용으로 발생하는 결과에 대한 책임은 사용자에게 있습니다. 이 프로젝트는 Kakao 및 KakaoTalk과 제휴하거나 공식 승인을 받은 제품이 아닙니다.
