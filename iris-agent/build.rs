@@ -7,11 +7,14 @@ fn main() {
         .expect("NOA_LSPLANT_BLOB must point to the LSPlant Android shared library");
     let cxx = std::env::var("NOA_CXX_STATIC")
         .expect("NOA_CXX_STATIC must point to the Android static C++ runtime");
+    let compiler_runtime = std::env::var("NOA_COMPILER_RUNTIME")
+        .expect("NOA_COMPILER_RUNTIME must point to the Android compiler runtime");
 
     for (name, path) in [
         ("NOA_LSPLANT_SHIM", &shim),
         ("NOA_LSPLANT_BLOB", &lsplant),
         ("NOA_CXX_STATIC", &cxx),
+        ("NOA_COMPILER_RUNTIME", &compiler_runtime),
     ] {
         assert!(
             std::path::Path::new(path).is_file(),
@@ -38,6 +41,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=noa_lsplant_shim");
     println!("cargo:rustc-link-lib=static=frida-gum");
     println!("cargo:rustc-link-arg={cxx}");
+    println!("cargo:rustc-link-arg={compiler_runtime}");
     println!("cargo:rustc-link-lib=log");
     println!("cargo:rustc-link-lib=dl");
     println!("cargo:rustc-link-lib=m");

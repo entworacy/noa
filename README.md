@@ -127,7 +127,7 @@ X-Noa-Token: API_TOKEN
 인증 없이 프로세스 생존 여부를 확인합니다.
 
 ```json
-{"ok":true,"service":"noa","version":"1.3.1"}
+{"ok":true,"service":"noa","version":"1.3.2"}
 ```
 
 ### `GET /api/status`
@@ -136,7 +136,7 @@ X-Noa-Token: API_TOKEN
 
 ```json
 {
-  "version":"1.3.1",
+  "version":"1.3.2",
   "revision":"development",
   "databaseAvailable":true,
   "androidAvailable":true,

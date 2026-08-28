@@ -37,6 +37,15 @@ library_targets=("aarch64-linux-android" "arm-linux-androideabi" "i686-linux-and
 frida_version="16.7.19"
 lsplant_version="6.4"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+assert_clear_cache_resolved() {
+  local library="$1"
+  if "$llvm_readelf" --dyn-syms "$library" | grep -Eq 'UND[[:space:]]+__clear_cache$'; then
+    echo "$(basename "$library")에 미해결 __clear_cache 심볼이 남아 있습니다." >&2
+    exit 1
+  fi
+}
 
 prepare_frida_core() {
   local architecture="$1"
@@ -128,12 +137,14 @@ for index in "${!abis[@]}"; do
     exit 1
   }
   echo "[noa] building $abi ($target)"
-  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" \
+  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" NOA_COMPILER_RUNTIME="$compiler_runtime" \
     cargo ndk -t "$abi" -P 26 build --release --manifest-path "$project_dir/kakao-agent/Cargo.toml" --locked
   kakao_agent="$project_dir/kakao-agent/target/$target/release/libnoa_kakao_agent.so"
-  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" \
+  assert_clear_cache_resolved "$kakao_agent"
+  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" NOA_COMPILER_RUNTIME="$compiler_runtime" \
     cargo ndk -t "$abi" -P 26 build --release --manifest-path "$project_dir/iris-agent/Cargo.toml" --locked
   iris_agent="$project_dir/iris-agent/target/$target/release/libnoa_iris_agent.so"
+  assert_clear_cache_resolved "$iris_agent"
   NOA_FRIDA_CORE_DEVKIT="$frida_core" NOA_KAKAO_AGENT_BLOB="$kakao_agent" NOA_IRIS_AGENT_BLOB="$iris_agent" RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$compiler_runtime" cargo ndk -t "$abi" -P 26 build --release --locked
   cp "target/$target/release/noa" "dist/noa-$abi"
 done

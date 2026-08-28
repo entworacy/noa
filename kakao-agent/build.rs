@@ -4,6 +4,7 @@ fn main() {
         "NOA_LSPLANT_SHIM",
         "NOA_LSPLANT_BLOB",
         "NOA_CXX_STATIC",
+        "NOA_COMPILER_RUNTIME",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -18,6 +19,8 @@ fn main() {
     let shim = std::env::var("NOA_LSPLANT_SHIM").expect("NOA_LSPLANT_SHIM is required");
     let lsplant = std::env::var("NOA_LSPLANT_BLOB").expect("NOA_LSPLANT_BLOB is required");
     let cxx = std::env::var("NOA_CXX_STATIC").expect("NOA_CXX_STATIC is required");
+    let compiler_runtime =
+        std::env::var("NOA_COMPILER_RUNTIME").expect("NOA_COMPILER_RUNTIME is required");
     let shim_directory = std::path::Path::new(&shim).parent().unwrap();
     println!("cargo:rustc-env=NOA_LSPLANT_BLOB={lsplant}");
     println!(
@@ -28,6 +31,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=noa_lsplant_shim");
     println!("cargo:rustc-link-lib=static=frida-gum");
     println!("cargo:rustc-link-arg={cxx}");
+    println!("cargo:rustc-link-arg={compiler_runtime}");
     println!("cargo:rustc-link-lib=log");
     println!("cargo:rustc-link-lib=dl");
     println!("cargo:rustc-link-lib=m");
