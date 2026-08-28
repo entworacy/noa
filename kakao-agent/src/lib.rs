@@ -21,9 +21,14 @@ mod commands;
 mod events;
 mod packets;
 mod room;
+mod signature_api;
+mod signature_index;
 
 pub(crate) use commands::{
     CommandResult, OpenChatJoinResult, Operation, command_operation, mark_complete, mark_loaded,
+};
+pub(crate) use signature_api::{
+    invoke_signature_operation, signature_class, signature_object, signature_static_value,
 };
 
 const ADAPTER_DEX: &[u8] = include_bytes!(concat!(
@@ -245,7 +250,7 @@ fn initialize_runtime() -> Result<(), String> {
                     LOG_INFO,
                     "Kakao agent initialization: resolving LOCO signature",
                 );
-                let signature_description = verify_signature_discovery(env)
+                let signature_description = signature_api::verify_discovery(env)
                     .map_err(|error| format!("verify KakaoTalk signatures: {error}"))?;
                 log(
                     LOG_INFO,
@@ -455,10 +460,15 @@ unsafe fn initialize_loader(env: *mut JNIEnv, loader: jobject) -> Result<(), Str
         "dev.noa.kakao.MainDispatch",
         "dev.noa.kakao.Hooker",
         "dev.noa.kakao.RoomWatcher",
-        "dev.noa.kakao.KakaoSignatureResolver",
     ] {
         unsafe { load_class(env, loader, name)? };
     }
+    let resolver = unsafe { load_class(env, loader, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let description = unsafe { signature_index::install(env, resolver)? };
+    log(
+        LOG_INFO,
+        &format!("Rust DEX signature index installed: {description}"),
+    );
     Ok(())
 }
 
@@ -682,20 +692,6 @@ unsafe fn resolve_loco_hooks(env: *mut JNIEnv) -> Result<LocoHooks, String> {
     })
 }
 
-unsafe fn verify_signature_discovery(env: *mut JNIEnv) -> Result<String, String> {
-    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
-    let description = unsafe {
-        call_static_object(
-            env,
-            resolver,
-            "verifySignatures",
-            "()Ljava/lang/String;",
-            &[],
-        )?
-    };
-    unsafe { java_string(env, description.cast()) }
-}
-
 unsafe fn find_exact_method(
     env: *mut JNIEnv,
     class: jclass,
@@ -761,82 +757,6 @@ unsafe fn app_class(env: *mut JNIEnv, name: &str) -> Result<jclass, String> {
         .get()
         .ok_or_else(|| "native runtime is not initialized".to_string())?;
     unsafe { load_class(env, runtime.loader as jobject, name) }
-}
-
-unsafe fn signature_class(env: *mut JNIEnv, role: &str) -> Result<jclass, String> {
-    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
-    let role = unsafe { new_string(env, role)? };
-    let class = unsafe {
-        call_static_object(
-            env,
-            resolver,
-            "classFor",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[object_value(role)],
-        )?
-    };
-    if class.is_null() {
-        Err("signature resolver returned a null class".to_string())
-    } else {
-        Ok(class.cast())
-    }
-}
-
-unsafe fn signature_object(env: *mut JNIEnv, role: &str) -> Result<jobject, String> {
-    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
-    let role = unsafe { new_string(env, role)? };
-    unsafe {
-        call_static_object(
-            env,
-            resolver,
-            "objectFor",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
-            &[object_value(role)],
-        )
-    }
-}
-
-unsafe fn signature_static_value(
-    env: *mut JNIEnv,
-    role: &str,
-    type_name: &str,
-) -> Result<jobject, String> {
-    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
-    let role = unsafe { new_string(env, role)? };
-    let type_name = unsafe { new_string(env, type_name)? };
-    unsafe {
-        call_static_object(
-            env,
-            resolver,
-            "staticValueFor",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
-            &[object_value(role), object_value(type_name)],
-        )
-    }
-}
-
-unsafe fn invoke_signature_operation(
-    env: *mut JNIEnv,
-    operation: &str,
-    target: jobject,
-    arguments: &[jobject],
-) -> Result<jobject, String> {
-    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
-    let operation = unsafe { new_string(env, operation)? };
-    let arguments = unsafe { object_array(env, arguments)? };
-    unsafe {
-        call_static_object(
-            env,
-            resolver,
-            "invokeOperation",
-            "(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
-            &[
-                object_value(operation),
-                object_value(target),
-                object_value(arguments.cast()),
-            ],
-        )
-    }
 }
 
 unsafe fn load_class(env: *mut JNIEnv, loader: jobject, name: &str) -> Result<jclass, String> {
