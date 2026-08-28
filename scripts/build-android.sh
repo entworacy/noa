@@ -36,6 +36,7 @@ clang_targets=("aarch64-linux-android" "armv7a-linux-androideabi" "i686-linux-an
 library_targets=("aarch64-linux-android" "arm-linux-androideabi" "i686-linux-android" "x86_64-linux-android")
 frida_version="16.7.19"
 lsplant_version="6.4"
+xdl_version="2.4.0"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
@@ -123,20 +124,47 @@ prepare_lsplant() {
   printf '%s\n' "$library"
 }
 
+prepare_xdl() {
+  local root="$project_dir/.tools/xdl-$xdl_version"
+  local archive="$project_dir/.tools/xdl-$xdl_version.tar.gz"
+  if [[ ! -f "$root/xdl/src/main/cpp/include/xdl.h" ]]; then
+    mkdir -p "$root"
+    if [[ ! -f "$archive" ]]; then
+      curl -fL --retry 3 -o "$archive" \
+        "https://github.com/hexhacking/xDL/archive/refs/tags/v$xdl_version.tar.gz"
+    fi
+    tar -xzf "$archive" --strip-components=1 -C "$root"
+  fi
+  printf '%s\n' "$root"
+}
+
 build_lsplant_shim() {
   local abi="$1"
   local clang_target="$2"
   local gum="$3"
+  local xdl="$4"
   local root="$project_dir/iris-agent/build/native/$abi"
-  local compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang++"
+  local c_compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang"
+  local cxx_compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang++"
   local archiver="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+  local xdl_source="$xdl/xdl/src/main/cpp"
   mkdir -p "$root"
-  "$compiler" -std=c++20 -fPIC -Oz -fvisibility=hidden \
-    -I"$project_dir/iris-agent/native" -I"$gum" \
+  "$cxx_compiler" -std=c++20 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
+    -I"$project_dir/iris-agent/native" -I"$gum" -I"$xdl_source/include" \
     -c "$project_dir/iris-agent/native/lsplant_shim.cpp" -o "$root/lsplant_shim.o"
-  "$archiver" rcs "$root/libnoa_lsplant_shim.a" "$root/lsplant_shim.o"
+  local objects=("$root/lsplant_shim.o")
+  local source
+  for source in "$xdl_source"/*.c; do
+    local object="$root/$(basename "${source%.c}").o"
+    "$c_compiler" -std=c17 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
+      -I"$xdl_source/include" -I"$xdl_source" -c "$source" -o "$object"
+    objects+=("$object")
+  done
+  "$archiver" rcs "$root/libnoa_lsplant_shim.a" "${objects[@]}"
   printf '%s\n' "$root/libnoa_lsplant_shim.a"
 }
+
+xdl_root="$(prepare_xdl)"
 
 for index in "${!abis[@]}"; do
   abi="${abis[$index]}"
@@ -148,7 +176,7 @@ for index in "${!abis[@]}"; do
   frida_core="$(prepare_frida_core "$frida_arch")"
   frida_gum="$(prepare_frida_gum "$frida_arch")"
   lsplant="$(prepare_lsplant "$abi")"
-  lsplant_shim="$(build_lsplant_shim "$abi" "$clang_target" "$frida_gum")"
+  lsplant_shim="$(build_lsplant_shim "$abi" "$clang_target" "$frida_gum" "$xdl_root")"
   cxx_runtime_dir="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$library_target"
   [[ -f "$cxx_runtime_dir/libc++_static.a" && -f "$cxx_runtime_dir/libc++abi.a" ]] || {
     echo "$abi Android C++ runtime을 찾지 못했습니다." >&2

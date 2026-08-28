@@ -23,6 +23,9 @@ fn main() {
     let compiler_runtime =
         std::env::var("NOA_COMPILER_RUNTIME").expect("NOA_COMPILER_RUNTIME is required");
     let shim_directory = std::path::Path::new(&shim).parent().unwrap();
+    println!("cargo:rerun-if-changed={shim}");
+    println!("cargo:rerun-if-changed={lsplant}");
+    println!("cargo:rerun-if-changed={compiler_runtime}");
     println!("cargo:rustc-env=NOA_LSPLANT_BLOB={lsplant}");
     println!(
         "cargo:rustc-link-search=native={}",

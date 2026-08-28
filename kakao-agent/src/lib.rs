@@ -41,7 +41,9 @@ const LOG_INFO: c_int = 4;
 const LOG_ERROR: c_int = 6;
 
 static START: Once = Once::new();
+static EVENT_START: Once = Once::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static RUNTIME_BOOTSTRAP_ERROR: OnceLock<String> = OnceLock::new();
 static RUNTIME_READY: OnceLock<Result<(), String>> = OnceLock::new();
 
 const LSPLANT: &[u8] = include_bytes!(env!("NOA_LSPLANT_BLOB"));
@@ -49,8 +51,8 @@ const LSPLANT: &[u8] = include_bytes!(env!("NOA_LSPLANT_BLOB"));
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn __android_log_write(priority: c_int, tag: *const c_char, text: *const c_char) -> c_int;
-    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
     fn dlerror() -> *const c_char;
+    fn noa_dlopen_fd(fd: c_int, flags: c_int) -> *mut c_void;
     fn noa_lsplant_init(env: *mut JNIEnv, handle: *mut c_void) -> bool;
     fn noa_lsplant_hook(
         env: *mut JNIEnv,
@@ -89,10 +91,26 @@ struct Hello<'a> {
     protocol: u8,
 }
 
+#[derive(Serialize)]
+struct FailureHello<'a> {
+    event: &'static str,
+    token: &'a str,
+    pid: u32,
+    protocol: u8,
+    error: &'a str,
+}
+
 struct Runtime {
     vm: usize,
     loader: usize,
     lsplant: usize,
+}
+
+struct LocoHooks {
+    send: jobject,
+    receive: jobject,
+    resume: jobject,
+    description: String,
 }
 
 unsafe impl Send for Runtime {}
@@ -123,18 +141,19 @@ pub unsafe extern "C" fn noa_agent_main(data: *const c_char, stay_resident: *mut
 
 fn serve(config: Bootstrap) {
     let address = SocketAddr::from(([127, 0, 0, 1], config.port));
-    let event_address = SocketAddr::from(([127, 0, 0, 1], config.event_port));
-    let (event_sender, event_receiver) = events::channel();
-    events::install(event_sender);
-    let event_token = config.token.clone();
-    let _ = thread::Builder::new()
-        .name("noa-kakao-events".to_string())
-        .spawn(move || events::run(event_address, event_token, event_receiver));
     loop {
         match TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
             Ok(mut stream) => {
-                if let Err(error) = session(&mut stream, &config.token) {
+                if let Err(error) = session(&mut stream, &config) {
                     log(LOG_ERROR, &error);
+                    if initialization_failed() {
+                        log(
+                            LOG_ERROR,
+                            "Kakao agent initialization is permanently stopped for this injection",
+                        );
+                        return;
+                    }
+                    thread::sleep(Duration::from_secs(2));
                 }
             }
             Err(_) => thread::sleep(Duration::from_secs(1)),
@@ -142,14 +161,25 @@ fn serve(config: Bootstrap) {
     }
 }
 
-fn session(stream: &mut TcpStream, token: &str) -> Result<(), String> {
-    initialize_runtime()?;
+fn session(stream: &mut TcpStream, config: &Bootstrap) -> Result<(), String> {
+    if let Err(error) = initialize_runtime() {
+        let failure = FailureHello {
+            event: "error",
+            token: &config.token,
+            pid: std::process::id(),
+            protocol: 1,
+            error: &error,
+        };
+        let _ = write_json(stream, &failure);
+        return Err(error);
+    }
+    ensure_event_bridge(config);
     stream
         .set_nodelay(true)
         .map_err(|error| error.to_string())?;
     let hello = Hello {
         event: "ready",
-        token,
+        token: &config.token,
         pid: std::process::id(),
         protocol: 1,
     };
@@ -172,7 +202,7 @@ fn session(stream: &mut TcpStream, token: &str) -> Result<(), String> {
                 continue;
             }
         };
-        if request.token != token {
+        if request.token != config.token {
             write_response(stream, request.id, Err("authentication failed".to_string()))?;
             continue;
         }
@@ -181,17 +211,94 @@ fn session(stream: &mut TcpStream, token: &str) -> Result<(), String> {
     }
 }
 
+fn ensure_event_bridge(config: &Bootstrap) {
+    let event_address = SocketAddr::from(([127, 0, 0, 1], config.event_port));
+    let event_token = config.token.clone();
+    EVENT_START.call_once(move || {
+        let (event_sender, event_receiver) = events::channel();
+        events::install(event_sender);
+        let _ = thread::Builder::new()
+            .name("noa-kakao-events".to_string())
+            .spawn(move || events::run(event_address, event_token, event_receiver));
+    });
+}
+
+fn initialization_failed() -> bool {
+    RUNTIME_BOOTSTRAP_ERROR.get().is_some() || RUNTIME_READY.get().is_some_and(Result::is_err)
+}
+
 fn initialize_runtime() -> Result<(), String> {
     if let Some(result) = RUNTIME_READY.get() {
         return result.clone();
     }
 
-    let runtime = if let Some(runtime) = RUNTIME.get() {
-        runtime
-    } else {
-        let vm = unsafe { locate_vm() }?;
-        let loader = with_attached(vm, |env| unsafe { create_loader(env) })?;
-        let lsplant = load_lsplant()?;
+    let runtime = bootstrap_runtime()?;
+
+    RUNTIME_READY
+        .get_or_init(|| {
+            with_attached(runtime.vm as *mut JavaVM, |env| unsafe {
+                log(LOG_INFO, "Kakao agent initialization: initializing LSPlant");
+                if !noa_lsplant_init(env, runtime.lsplant as *mut c_void) {
+                    return Err("LSPlant initialization failed".to_string());
+                }
+                log(
+                    LOG_INFO,
+                    "Kakao agent initialization: resolving LOCO signature",
+                );
+                let hooks = resolve_loco_hooks(env)
+                    .map_err(|error| format!("resolve LOCO signature: {error}"))?;
+                log(
+                    LOG_INFO,
+                    &format!("LOCO signature resolved: {}", hooks.description),
+                );
+                log(LOG_INFO, "Kakao agent initialization: hooking LOCO send");
+                install_hook(env, hooks.send, "LOCO send", KIND_LOCO_SEND, false, 1)
+                    .map_err(|error| format!("hook LOCO send: {error}"))?;
+                log(LOG_INFO, "Kakao agent initialization: hooking LOCO receive");
+                install_hook(
+                    env,
+                    hooks.receive,
+                    "LOCO receive",
+                    KIND_LOCO_RECEIVE,
+                    false,
+                    1,
+                )
+                .map_err(|error| format!("hook LOCO receive: {error}"))?;
+                log(
+                    LOG_INFO,
+                    "Kakao agent initialization: deoptimizing LOCO coroutine",
+                );
+                deoptimize_method(env, hooks.resume, "LOCO coroutine resume")
+                    .map_err(|error| format!("deoptimize LOCO coroutine: {error}"))?;
+                log(
+                    LOG_INFO,
+                    "Kakao agent initialization: installing room watcher",
+                );
+                post_main(env, 0, ACTION_INSTALL_ROOM_WATCHER)
+                    .map_err(|error| format!("install room watcher: {error}"))?;
+                Ok(())
+            })
+        })
+        .clone()?;
+    log(LOG_INFO, "Rust KakaoTalk agent ready");
+    Ok(())
+}
+
+fn bootstrap_runtime() -> Result<&'static Runtime, String> {
+    if let Some(error) = RUNTIME_BOOTSTRAP_ERROR.get() {
+        return Err(error.clone());
+    }
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let result = (|| -> Result<&'static Runtime, String> {
+        log(LOG_INFO, "Kakao agent initialization: locating JVM");
+        let vm = unsafe { locate_vm() }.map_err(|error| format!("locate JVM: {error}"))?;
+        log(LOG_INFO, "Kakao agent initialization: loading LSPlant");
+        let lsplant = load_lsplant().map_err(|error| format!("load LSPlant: {error}"))?;
+        log(LOG_INFO, "Kakao agent initialization: creating DEX adapter");
+        let loader = with_attached(vm, |env| unsafe { create_loader(env) })
+            .map_err(|error| format!("create DEX adapter: {error}"))?;
         let _ = RUNTIME.set(Runtime {
             vm: vm as usize,
             loader: loader as usize,
@@ -199,33 +306,12 @@ fn initialize_runtime() -> Result<(), String> {
         });
         RUNTIME
             .get()
-            .ok_or_else(|| "native runtime could not be stored".to_string())?
-    };
-
-    RUNTIME_READY
-        .get_or_init(|| {
-            with_attached(runtime.vm as *mut JavaVM, |env| unsafe {
-                if !noa_lsplant_init(env, runtime.lsplant as *mut c_void) {
-                    return Err("LSPlant initialization failed".to_string());
-                }
-                install_hook(env, "gt.h", "y", &["mt.k"], KIND_LOCO_SEND, false, 1)?;
-                install_hook(
-                    env,
-                    "gt.h$b",
-                    "b",
-                    &["mt.l", "kotlin.coroutines.Continuation"],
-                    KIND_LOCO_RECEIVE,
-                    false,
-                    1,
-                )?;
-                deoptimize_method(env, "gt.h$d", "invokeSuspend", &["java.lang.Object"])?;
-                post_main(env, 0, ACTION_INSTALL_ROOM_WATCHER)?;
-                Ok(())
-            })
-        })
-        .clone()?;
-    log(LOG_INFO, "Rust KakaoTalk agent ready");
-    Ok(())
+            .ok_or_else(|| "native runtime could not be stored".to_string())
+    })();
+    if let Err(error) = &result {
+        let _ = RUNTIME_BOOTSTRAP_ERROR.set(error.clone());
+    }
+    result
 }
 
 fn with_env<T>(run: impl FnOnce(*mut JNIEnv) -> Result<T, String>) -> Result<T, String> {
@@ -323,7 +409,15 @@ unsafe fn create_loader(env: *mut JNIEnv) -> Result<jobject, String> {
     if global.is_null() {
         return Err("DEX class loader global reference is null".to_string());
     }
-    let bridge = unsafe { load_class(env, global, "dev.noa.kakao.Bridge")? };
+    if let Err(error) = unsafe { initialize_loader(env, global) } {
+        unsafe { ((**env).v1_4.DeleteGlobalRef)(env, global) };
+        return Err(error);
+    }
+    Ok(global)
+}
+
+unsafe fn initialize_loader(env: *mut JNIEnv, loader: jobject) -> Result<(), String> {
+    let bridge = unsafe { load_class(env, loader, "dev.noa.kakao.Bridge")? };
     let methods = [
         native_method("loaded", "(J)V", bridge_loaded as *mut c_void),
         native_method(
@@ -358,9 +452,9 @@ unsafe fn create_loader(env: *mut JNIEnv) -> Result<jobject, String> {
         "dev.noa.kakao.Hooker",
         "dev.noa.kakao.RoomWatcher",
     ] {
-        unsafe { load_class(env, global, name)? };
+        unsafe { load_class(env, loader, name)? };
     }
-    Ok(global)
+    Ok(())
 }
 
 unsafe extern "system" fn bridge_loaded(_: *mut JNIEnv, _: jclass, id: jlong) {
@@ -482,15 +576,12 @@ unsafe fn find_room(env: *mut JNIEnv, room: i64) -> Result<jobject, String> {
 
 unsafe fn install_hook(
     env: *mut JNIEnv,
-    class_name: &str,
-    method_name: &str,
-    parameter_types: &[&str],
+    target: jobject,
+    label: &str,
     kind: i32,
     static_target: bool,
     packet_index: i32,
 ) -> Result<(), String> {
-    let target_class = unsafe { app_class(env, class_name)? };
-    let target = unsafe { find_exact_method(env, target_class, method_name, parameter_types)? };
     let runtime = RUNTIME
         .get()
         .ok_or_else(|| "runtime is unavailable".to_string())?;
@@ -520,9 +611,7 @@ unsafe fn install_hook(
     };
     unsafe { check(env, "install LOCO hook")? };
     if backup.is_null() {
-        return Err(format!(
-            "LSPlant returned no backup for {class_name}.{method_name}"
-        ));
+        return Err(format!("LSPlant returned no backup for {label}"));
     }
     let field = unsafe {
         ((**env).v1_4.GetFieldID)(
@@ -544,24 +633,46 @@ unsafe fn install_hook(
     }
 }
 
-unsafe fn deoptimize_method(
-    env: *mut JNIEnv,
-    class_name: &str,
-    method_name: &str,
-    parameter_types: &[&str],
-) -> Result<(), String> {
-    let target_class = unsafe { app_class(env, class_name)? };
-    let target = unsafe { find_exact_method(env, target_class, method_name, parameter_types)? };
+unsafe fn deoptimize_method(env: *mut JNIEnv, target: jobject, label: &str) -> Result<(), String> {
     let runtime = RUNTIME
         .get()
         .ok_or_else(|| "runtime is unavailable".to_string())?;
     if unsafe { noa_lsplant_deoptimize(env, runtime.lsplant as *mut c_void, target) } {
         Ok(())
     } else {
-        Err(format!(
-            "LSPlant could not deoptimize {class_name}.{method_name}"
-        ))
+        Err(format!("LSPlant could not deoptimize {label}"))
     }
+}
+
+unsafe fn resolve_loco_hooks(env: *mut JNIEnv) -> Result<LocoHooks, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.LocoSignatureResolver")? };
+    let resolved = unsafe {
+        call_static_object(env, resolver, "resolve", "()[Ljava/lang/Object;", &[])? as jobjectArray
+    };
+    if resolved.is_null() {
+        return Err("LOCO signature resolver returned null".to_string());
+    }
+    let count = unsafe { ((**env).v1_4.GetArrayLength)(env, resolved) };
+    unsafe { check(env, "read LOCO signature result")? };
+    if count != 4 {
+        return Err(format!(
+            "LOCO signature resolver returned {count} values instead of 4"
+        ));
+    }
+    let mut values = [ptr::null_mut(); 4];
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = unsafe { ((**env).v1_4.GetObjectArrayElement)(env, resolved, index as jint) };
+        unsafe { check(env, "read LOCO signature value")? };
+        if value.is_null() {
+            return Err(format!("LOCO signature value {index} was null"));
+        }
+    }
+    Ok(LocoHooks {
+        send: values[0],
+        receive: values[1],
+        resume: values[2],
+        description: unsafe { java_string(env, values[3].cast())? },
+    })
 }
 
 unsafe fn find_exact_method(
@@ -1244,8 +1355,7 @@ fn load_lsplant() -> Result<*mut c_void, String> {
     let mut file = unsafe { File::from_raw_fd(fd) };
     file.write_all(LSPLANT).map_err(|error| error.to_string())?;
     file.flush().map_err(|error| error.to_string())?;
-    let path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
-    let handle = unsafe { dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    let handle = unsafe { noa_dlopen_fd(fd, libc::RTLD_NOW | libc::RTLD_LOCAL) };
     if handle.is_null() {
         let detail = unsafe {
             let value = dlerror();

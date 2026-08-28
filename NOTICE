@@ -22,3 +22,8 @@ licenses/LSPLANT-LGPL-3.0 and licenses/GPL-3.0.
 This product embeds Frida Core and Frida Gum from Frida
 (https://github.com/frida/frida). Its license notice is provided in
 licenses/FRIDA.
+
+This product statically links xDL from HexHacking Team
+(https://github.com/hexhacking/xDL) for Android ELF symbol resolution.
+xDL is licensed under the MIT License; its license text is provided in
+licenses/XDL.

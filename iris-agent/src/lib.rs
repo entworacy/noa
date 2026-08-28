@@ -41,8 +41,8 @@ static ENDPOINT_DISPATCHED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
     fn dlerror() -> *const c_char;
+    fn noa_dlopen_fd(fd: c_int, flags: c_int) -> *mut c_void;
     fn noa_lsplant_init(env: *mut JNIEnv, handle: *mut c_void) -> bool;
     fn noa_lsplant_hook(
         env: *mut JNIEnv,
@@ -852,8 +852,7 @@ fn load_lsplant() -> Result<*mut c_void, String> {
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     file.write_all(LSPLANT).map_err(|error| error.to_string())?;
     file.flush().map_err(|error| error.to_string())?;
-    let path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
-    let handle = unsafe { dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    let handle = unsafe { noa_dlopen_fd(fd, libc::RTLD_NOW | libc::RTLD_LOCAL) };
     if handle.is_null() {
         let detail = unsafe {
             let value = dlerror();

@@ -7,7 +7,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -178,6 +178,7 @@ static COMMAND_SENDER: OnceLock<mpsc::Sender<KakaoCommand>> = OnceLock::new();
 type PendingResponse = mpsc::SyncSender<Result<Option<String>, String>>;
 static PENDING: OnceLock<Mutex<HashMap<u64, PendingResponse>>> = OnceLock::new();
 static NEXT_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+static KAKAO_FATAL_PID: AtomicU32 = AtomicU32::new(0);
 
 pub fn launch(config: Arc<Settings>) {
     if let Err(error) = thread::Builder::new()
@@ -496,6 +497,14 @@ unsafe fn refresh_native_agent(
     if slot.is_some() && kind.active() {
         retry.record_success();
     }
+    if matches!(kind, NativeKind::Kakao) {
+        let fatal_pid = KAKAO_FATAL_PID.load(Ordering::Acquire);
+        if fatal_pid != 0 && target != Some(fatal_pid) {
+            KAKAO_FATAL_PID.store(0, Ordering::Release);
+        } else if target == Some(fatal_pid) {
+            return;
+        }
+    }
     let stalled = slot.as_ref().is_some_and(|injection| {
         !kind.active() && injection.injected_at.elapsed() >= Duration::from_secs(15)
     });
@@ -682,6 +691,22 @@ fn accept_kakao_connection(stream: TcpStream, token: &str) -> Result<NativeConne
         return Err("준비 응답 없이 연결이 종료되었습니다".to_string());
     }
     let hello: Value = serde_json::from_str(line.trim()).map_err(|error| error.to_string())?;
+    if hello.get("event").and_then(Value::as_str) == Some("error")
+        && hello.get("token").and_then(Value::as_str) == Some(token)
+    {
+        if let Some(pid) = hello
+            .get("pid")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+        {
+            KAKAO_FATAL_PID.store(pid, Ordering::Release);
+        }
+        let detail = hello
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("알 수 없는 초기화 오류");
+        return Err(format!("네이티브 에이전트 초기화 실패: {detail}"));
+    }
     if hello.get("event").and_then(Value::as_str) != Some("ready")
         || hello.get("token").and_then(Value::as_str) != Some(token)
         || hello.get("protocol").and_then(Value::as_u64) != Some(1)
@@ -693,6 +718,7 @@ fn accept_kakao_connection(stream: TcpStream, token: &str) -> Result<NativeConne
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
         .ok_or_else(|| "네이티브 에이전트 PID가 없습니다".to_string())?;
+    KAKAO_FATAL_PID.store(0, Ordering::Release);
     Ok(NativeConnection {
         stream,
         reader,
