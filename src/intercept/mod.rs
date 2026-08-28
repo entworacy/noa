@@ -6,6 +6,9 @@ use std::{
     },
 };
 
+#[cfg(any(target_os = "android", test))]
+use std::time::{Duration, Instant};
+
 use crate::{model::LocoPacket, settings::Settings};
 use tokio::sync::broadcast;
 
@@ -20,6 +23,57 @@ static LOCO_PACKETS: OnceLock<RwLock<VecDeque<LocoPacket>>> = OnceLock::new();
 static DATABASE_INVALIDATIONS: OnceLock<broadcast::Sender<DatabaseInvalidation>> = OnceLock::new();
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static LOCO_LIMIT: OnceLock<usize> = OnceLock::new();
+
+#[cfg(any(target_os = "android", test))]
+struct NativeInjectionRetry {
+    target: Option<u32>,
+    consecutive_failures: u32,
+    retry_at: Instant,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl NativeInjectionRetry {
+    fn new() -> Self {
+        Self {
+            target: None,
+            consecutive_failures: 0,
+            retry_at: Instant::now(),
+        }
+    }
+
+    fn observe_target(&mut self, target: Option<u32>) {
+        if self.target != target {
+            self.target = target;
+            self.consecutive_failures = 0;
+            self.retry_at = Instant::now();
+        }
+    }
+
+    fn ready(&self) -> bool {
+        Instant::now() >= self.retry_at
+    }
+
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.retry_at = Instant::now();
+    }
+
+    fn record_failure(&mut self) -> (u32, Duration) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        let delay = native_injection_retry_delay(self.consecutive_failures);
+        self.retry_at = Instant::now() + delay;
+        (self.consecutive_failures, delay)
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn native_injection_retry_delay(consecutive_failures: u32) -> Duration {
+    const DELAYS_SECONDS: [u64; 6] = [2, 4, 8, 16, 32, 60];
+    let index = consecutive_failures
+        .saturating_sub(1)
+        .min((DELAYS_SECONDS.len() - 1) as u32) as usize;
+    Duration::from_secs(DELAYS_SECONDS[index])
+}
 
 #[derive(Clone, Debug)]
 pub struct DatabaseInvalidation {
@@ -217,4 +271,34 @@ fn set_active(value: bool) {
 #[cfg(target_os = "android")]
 fn set_kakao_active(value: bool) {
     KAKAO_ACTIVE.store(value, Ordering::Release);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NativeInjectionRetry, native_injection_retry_delay};
+    use std::time::Duration;
+
+    #[test]
+    fn native_injection_retry_uses_capped_exponential_delays() {
+        let expected = [2, 4, 8, 16, 32, 60, 60, 60];
+        for (failure, seconds) in (1_u32..).zip(expected) {
+            assert_eq!(
+                native_injection_retry_delay(failure),
+                Duration::from_secs(seconds)
+            );
+        }
+    }
+
+    #[test]
+    fn native_injection_retry_resets_for_a_new_process() {
+        let mut retry = NativeInjectionRetry::new();
+        retry.observe_target(Some(10));
+        retry.record_failure();
+        assert_eq!(retry.consecutive_failures, 1);
+        assert!(!retry.ready());
+
+        retry.observe_target(Some(11));
+        assert_eq!(retry.consecutive_failures, 0);
+        assert!(retry.ready());
+    }
 }

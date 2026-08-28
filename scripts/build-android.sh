@@ -39,10 +39,33 @@ lsplant_version="6.4"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
-assert_clear_cache_resolved() {
+assert_agent_runtime_resolved() {
   local library="$1"
-  if "$llvm_readelf" --dyn-syms "$library" | grep -Eq 'UND[[:space:]]+__clear_cache$'; then
+  if "$llvm_readelf" --dyn-syms "$library" \
+    | awk '$7 == "UND" && $8 == "__clear_cache" { found = 1 } END { exit !found }'; then
     echo "$(basename "$library")에 미해결 __clear_cache 심볼이 남아 있습니다." >&2
+    exit 1
+  fi
+  if "$llvm_readelf" --dyn-syms "$library" \
+    | awk '
+        $5 == "GLOBAL" && $7 == "UND" {
+          sub(/@.*/, "", $8)
+          if ($8 ~ /^_Z/ || $8 ~ /^__cxa_/ || $8 == "__gxx_personality_v0") {
+            if ($8 != "__cxa_atexit" && $8 != "__cxa_finalize") found = 1
+          }
+        }
+        END { exit !found }
+      '; then
+    echo "$(basename "$library")에 미해결 C++ 런타임 심볼이 남아 있습니다." >&2
+    exit 1
+  fi
+}
+
+assert_frida_selinux_patch_linked() {
+  local binary="$1"
+  if ! "$llvm_readelf" --dyn-syms --wide "$binary" \
+    | awk '$7 != "UND" && $8 == "frida_selinux_patch_policy" { found = 1 } END { exit !found }'; then
+    echo "$(basename "$binary")에 Frida Android SELinux 정책 초기화 함수가 링크되지 않았습니다." >&2
     exit 1
   fi
 }
@@ -126,8 +149,8 @@ for index in "${!abis[@]}"; do
   frida_gum="$(prepare_frida_gum "$frida_arch")"
   lsplant="$(prepare_lsplant "$abi")"
   lsplant_shim="$(build_lsplant_shim "$abi" "$clang_target" "$frida_gum")"
-  cxx_static="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$library_target/libc++_static.a"
-  [[ -f "$cxx_static" ]] || {
+  cxx_runtime_dir="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$library_target"
+  [[ -f "$cxx_runtime_dir/libc++_static.a" && -f "$cxx_runtime_dir/libc++abi.a" ]] || {
     echo "$abi Android C++ runtime을 찾지 못했습니다." >&2
     exit 1
   }
@@ -137,16 +160,18 @@ for index in "${!abis[@]}"; do
     exit 1
   }
   echo "[noa] building $abi ($target)"
-  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" NOA_COMPILER_RUNTIME="$compiler_runtime" \
+  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_RUNTIME_DIR="$cxx_runtime_dir" NOA_COMPILER_RUNTIME="$compiler_runtime" \
     cargo ndk -t "$abi" -P 26 build --release --manifest-path "$project_dir/kakao-agent/Cargo.toml" --locked
   kakao_agent="$project_dir/kakao-agent/target/$target/release/libnoa_kakao_agent.so"
-  assert_clear_cache_resolved "$kakao_agent"
-  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_STATIC="$cxx_static" NOA_COMPILER_RUNTIME="$compiler_runtime" \
+  assert_agent_runtime_resolved "$kakao_agent"
+  NOA_FRIDA_GUM_DEVKIT="$frida_gum" NOA_LSPLANT_SHIM="$lsplant_shim" NOA_LSPLANT_BLOB="$lsplant" NOA_CXX_RUNTIME_DIR="$cxx_runtime_dir" NOA_COMPILER_RUNTIME="$compiler_runtime" \
     cargo ndk -t "$abi" -P 26 build --release --manifest-path "$project_dir/iris-agent/Cargo.toml" --locked
   iris_agent="$project_dir/iris-agent/target/$target/release/libnoa_iris_agent.so"
-  assert_clear_cache_resolved "$iris_agent"
+  assert_agent_runtime_resolved "$iris_agent"
   NOA_FRIDA_CORE_DEVKIT="$frida_core" NOA_KAKAO_AGENT_BLOB="$kakao_agent" NOA_IRIS_AGENT_BLOB="$iris_agent" RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$compiler_runtime" cargo ndk -t "$abi" -P 26 build --release --locked
-  cp "target/$target/release/noa" "dist/noa-$abi"
+  noa_binary="$project_dir/target/$target/release/noa"
+  assert_frida_selinux_patch_linked "$noa_binary"
+  cp "$noa_binary" "dist/noa-$abi"
 done
 
 echo "[noa] Android binaries are in $project_dir/dist"

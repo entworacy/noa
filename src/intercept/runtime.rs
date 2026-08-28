@@ -19,8 +19,8 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 
 use super::{
-    DatabaseInvalidation, record_database_invalidation, record_loco_packet, set_active,
-    set_kakao_active,
+    DatabaseInvalidation, NativeInjectionRetry, record_database_invalidation, record_loco_packet,
+    set_active, set_kakao_active,
 };
 use crate::{failure::NoaError, model::LocoPacket, settings::Settings};
 
@@ -39,6 +39,7 @@ enum GBytes {}
 
 unsafe extern "C" {
     fn frida_init();
+    fn frida_selinux_patch_policy();
     fn frida_deinit();
     fn frida_version_string() -> *const c_char;
     fn frida_unref(value: *mut c_void);
@@ -385,6 +386,8 @@ fn run(config: Arc<Settings>) {
         );
 
         frida_init();
+        frida_selinux_patch_policy();
+        info!("Frida Android SELinux 정책 초기화 호출 완료");
         let version = string_from_pointer(frida_version_string());
         info!(%version, "내장 Frida Core 초기화 완료");
         let manager = frida_device_manager_new();
@@ -414,8 +417,8 @@ fn run(config: Arc<Settings>) {
         let mut kakao_target = None;
         let mut iris_observed = None;
         let mut next_scan = Instant::now();
-        let mut iris_retry = Instant::now();
-        let mut kakao_retry = Instant::now();
+        let mut iris_retry = NativeInjectionRetry::new();
+        let mut kakao_retry = NativeInjectionRetry::new();
         loop {
             pump();
             let now = Instant::now();
@@ -478,8 +481,9 @@ unsafe fn refresh_native_agent(
     port: u16,
     event_port: u16,
     config: &Settings,
-    retry_at: &mut Instant,
+    retry: &mut NativeInjectionRetry,
 ) {
+    retry.observe_target(target);
     let changed = slot
         .as_ref()
         .is_some_and(|injection| target != Some(injection.pid));
@@ -489,13 +493,23 @@ unsafe fn refresh_native_agent(
             fail_pending("KakaoTalk 네이티브 후킹 연결이 종료되었습니다");
         }
     }
+    if slot.is_some() && kind.active() {
+        retry.record_success();
+    }
     let stalled = slot.as_ref().is_some_and(|injection| {
         !kind.active() && injection.injected_at.elapsed() >= Duration::from_secs(15)
     });
     if stalled {
         *slot = None;
+        let (consecutive_failures, retry_delay) = retry.record_failure();
+        warn!(
+            process = kind.label(),
+            consecutive_failures,
+            retry_after_seconds = retry_delay.as_secs(),
+            "Rust 에이전트 준비 시간 초과; 재주입을 예약합니다"
+        );
     }
-    if slot.is_some() || target.is_none() || Instant::now() < *retry_at {
+    if slot.is_some() || target.is_none() || !retry.ready() {
         return;
     }
     let pid = target.unwrap();
@@ -514,8 +528,15 @@ unsafe fn refresh_native_agent(
             });
         }
         Err(message) => {
-            warn!(pid, process = kind.label(), error = %message, "Rust 에이전트 주입 실패");
-            *retry_at = Instant::now() + Duration::from_secs(2);
+            let (consecutive_failures, retry_delay) = retry.record_failure();
+            warn!(
+                pid,
+                process = kind.label(),
+                error = %message,
+                consecutive_failures,
+                retry_after_seconds = retry_delay.as_secs(),
+                "Rust 에이전트 주입 실패"
+            );
         }
     }
 }

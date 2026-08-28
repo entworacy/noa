@@ -24,6 +24,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const START_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const SU_PATHS: [&str; 3] = ["/system/bin/su", "/system/xbin/su", "/sbin/su"];
 static START_LOCK: Mutex<()> = Mutex::new(());
 
 pub enum TextClickResult {
@@ -614,7 +615,9 @@ fn launch_agent() -> Result<(), String> {
     let stderr = stdout
         .try_clone()
         .map_err(|error| format!("UiAutomator 에이전트 로그 복제 실패: {error}"))?;
-    Command::new("/system/xbin/su")
+    let su = su_executable();
+    tracing::info!(executable = su, "UiAutomator 에이전트 su 실행 경로 선택");
+    Command::new(su)
         .args([
             "shell",
             "/system/bin/uiautomator",
@@ -629,7 +632,15 @@ fn launch_agent() -> Result<(), String> {
         .stderr(Stdio::from(stderr))
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("UiAutomator 에이전트 실행 실패: {error}"))
+        .map_err(|error| format!("UiAutomator 에이전트 실행 실패 ({su}): {error}"))
+}
+
+fn su_executable() -> &'static str {
+    SU_PATHS
+        .iter()
+        .copied()
+        .find(|path| fs::metadata(path).is_ok())
+        .unwrap_or("su")
 }
 
 fn probe() -> bool {

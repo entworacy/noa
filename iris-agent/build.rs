@@ -5,15 +5,14 @@ fn main() {
         .expect("NOA_LSPLANT_SHIM must point to the LSPlant shim archive");
     let lsplant = std::env::var("NOA_LSPLANT_BLOB")
         .expect("NOA_LSPLANT_BLOB must point to the LSPlant Android shared library");
-    let cxx = std::env::var("NOA_CXX_STATIC")
-        .expect("NOA_CXX_STATIC must point to the Android static C++ runtime");
+    let cxx_runtime = std::env::var("NOA_CXX_RUNTIME_DIR")
+        .expect("NOA_CXX_RUNTIME_DIR must point to the Android static C++ runtime directory");
     let compiler_runtime = std::env::var("NOA_COMPILER_RUNTIME")
         .expect("NOA_COMPILER_RUNTIME must point to the Android compiler runtime");
 
     for (name, path) in [
         ("NOA_LSPLANT_SHIM", &shim),
         ("NOA_LSPLANT_BLOB", &lsplant),
-        ("NOA_CXX_STATIC", &cxx),
         ("NOA_COMPILER_RUNTIME", &compiler_runtime),
     ] {
         assert!(
@@ -22,6 +21,12 @@ fn main() {
         );
         println!("cargo:rerun-if-env-changed={name}");
     }
+    assert!(
+        std::path::Path::new(&cxx_runtime).join("libc++_static.a").is_file()
+            && std::path::Path::new(&cxx_runtime).join("libc++abi.a").is_file(),
+        "Android static C++ runtime archives not found in: {cxx_runtime}"
+    );
+    println!("cargo:rerun-if-env-changed=NOA_CXX_RUNTIME_DIR");
     let gum_archive = std::path::Path::new(&gum).join("libfrida-gum.a");
     assert!(
         gum_archive.is_file(),
@@ -40,7 +45,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={gum}");
     println!("cargo:rustc-link-lib=static=noa_lsplant_shim");
     println!("cargo:rustc-link-lib=static=frida-gum");
-    println!("cargo:rustc-link-arg={cxx}");
+    println!("cargo:rustc-link-arg={cxx_runtime}/libc++_static.a");
+    println!("cargo:rustc-link-arg={cxx_runtime}/libc++abi.a");
     println!("cargo:rustc-link-arg={compiler_runtime}");
     println!("cargo:rustc-link-lib=log");
     println!("cargo:rustc-link-lib=dl");
