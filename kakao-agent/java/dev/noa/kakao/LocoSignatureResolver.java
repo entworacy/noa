@@ -1,24 +1,16 @@
 package dev.noa.kakao;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.Enumeration;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 /** Resolves LOCO hook targets from relationships that survive R8 renaming. */
 public final class LocoSignatureResolver {
-    private static final Profile[] PROFILES = {
-        new Profile(29260630L, "gt.h"),
-        new Profile(29260720L, "com.quram.mi.ocr.ig30"),
-    };
-
     private LocoSignatureResolver() {}
 
     /** Returns send, receive, coroutine-resume methods and a diagnostic description. */
@@ -28,50 +20,17 @@ public final class LocoSignatureResolver {
         ClassLoader loader = (ClassLoader) context.getMethod("getClassLoader").invoke(application);
         long versionCode = versionCode(application);
         List<String> failures = new ArrayList<>();
-        Set<String> attempted = new LinkedHashSet<>();
-        Set<String> classes = applicationClasses(application);
-
-        // Profiles are only an acceleration hint. Every result still has to pass
-        // the same relationship checks as an unknown version.
-        for (Profile profile : PROFILES) {
-            if (profile.versionCode == versionCode) {
-                Resolution resolution = tryCandidate(
-                        loader, profile.clientClass, classes, failures);
-                attempted.add(profile.clientClass);
-                if (resolution != null) {
-                    return resolution.result(versionCode, "profile");
-                }
-            }
-        }
-        for (Profile profile : PROFILES) {
-            if (!attempted.add(profile.clientClass)) {
-                continue;
-            }
-            Resolution resolution = tryCandidate(
-                    loader, profile.clientClass, classes, failures);
-            if (resolution != null) {
-                return resolution.result(versionCode, "known-signature");
-            }
-        }
-
-        // Only outer classes that actually have inner classes can be LocoClient.
-        // This avoids loading every class from a large, multidex KakaoTalk APK.
-        Set<String> outers = new HashSet<>();
+        Set<String> classes = new LinkedHashSet<>(Arrays.asList(
+                KakaoSignatureResolver.sourceClassNames("LocoClient.kt")));
+        List<String> names = new ArrayList<>();
         for (String name : classes) {
-            int separator = name.indexOf('$');
-            if (separator > 0) {
-                outers.add(name.substring(0, separator));
-            }
+            if (name.indexOf('$') < 0) names.add(name);
         }
-        List<String> names = new ArrayList<>(outers);
         Collections.sort(names);
         for (String name : names) {
-            if (!attempted.add(name)) {
-                continue;
-            }
             Resolution resolution = tryCandidate(loader, name, classes, failures);
             if (resolution != null) {
-                return resolution.result(versionCode, "dex-signature");
+                return resolution.result(versionCode, "dex-source-signature");
             }
         }
         String detail = failures.isEmpty()
@@ -79,7 +38,7 @@ public final class LocoSignatureResolver {
                 : failures.get(failures.size() - 1);
         throw new NoSuchMethodException(
                 "LOCO signature was not found (versionCode=" + versionCode
-                        + ", scanned=" + classes.size() + "): " + detail);
+                        + ", sourceCandidates=" + classes.size() + "): " + detail);
     }
 
     private static Resolution tryCandidate(
@@ -292,63 +251,6 @@ public final class LocoSignatureResolver {
             }
         } catch (Throwable ignored) {
             return -1L;
-        }
-    }
-
-    private static Set<String> applicationClasses(Object application) throws Exception {
-        Object info = Class.forName("android.content.Context")
-                .getMethod("getApplicationInfo")
-                .invoke(application);
-        List<String> paths = new ArrayList<>();
-        paths.add((String) publicField(info, "sourceDir"));
-        Object splits = publicField(info, "splitSourceDirs");
-        if (splits instanceof String[]) {
-            Collections.addAll(paths, (String[]) splits);
-        }
-
-        Class<?> dexFileClass = Class.forName("dalvik.system.DexFile");
-        Constructor<?> constructor = dexFileClass.getConstructor(String.class);
-        Method entries = dexFileClass.getMethod("entries");
-        Method close = dexFileClass.getMethod("close");
-        Set<String> classes = new LinkedHashSet<>();
-        for (String path : paths) {
-            if (path == null || path.isEmpty()) {
-                continue;
-            }
-            Object dexFile = null;
-            try {
-                dexFile = constructor.newInstance(path);
-                @SuppressWarnings("unchecked")
-                Enumeration<String> names = (Enumeration<String>) entries.invoke(dexFile);
-                while (names.hasMoreElements()) {
-                    classes.add(names.nextElement());
-                }
-            } catch (Throwable ignored) {
-                // ABI and resource-only splits do not necessarily contain a DEX file.
-            } finally {
-                if (dexFile != null) {
-                    try {
-                        close.invoke(dexFile);
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }
-        }
-        return classes;
-    }
-
-    private static Object publicField(Object target, String name) throws Exception {
-        Field field = target.getClass().getField(name);
-        return field.get(target);
-    }
-
-    private static final class Profile {
-        final long versionCode;
-        final String clientClass;
-
-        Profile(long versionCode, String clientClass) {
-            this.versionCode = versionCode;
-            this.clientClass = clientClass;
         }
     }
 

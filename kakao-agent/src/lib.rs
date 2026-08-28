@@ -245,6 +245,12 @@ fn initialize_runtime() -> Result<(), String> {
                     LOG_INFO,
                     "Kakao agent initialization: resolving LOCO signature",
                 );
+                let signature_description = verify_signature_discovery(env)
+                    .map_err(|error| format!("verify KakaoTalk signatures: {error}"))?;
+                log(
+                    LOG_INFO,
+                    &format!("KakaoTalk signature discovery verified: {signature_description}"),
+                );
                 let hooks = resolve_loco_hooks(env)
                     .map_err(|error| format!("resolve LOCO signature: {error}"))?;
                 log(
@@ -447,10 +453,9 @@ unsafe fn initialize_loader(env: *mut JNIEnv, loader: jobject) -> Result<(), Str
     for name in [
         "dev.noa.kakao.LoadContinuation",
         "dev.noa.kakao.MainDispatch",
-        "dev.noa.kakao.SendListener",
-        "dev.noa.kakao.KickListener",
         "dev.noa.kakao.Hooker",
         "dev.noa.kakao.RoomWatcher",
+        "dev.noa.kakao.KakaoSignatureResolver",
     ] {
         unsafe { load_class(env, loader, name)? };
     }
@@ -554,19 +559,21 @@ unsafe fn post_main(env: *mut JNIEnv, id: u64, action: i32) -> Result<(), String
 }
 
 unsafe fn loco_connected(env: *mut JNIEnv) -> Result<bool, String> {
-    let core_class = unsafe { app_class(env, "Us.d")? };
-    let core = unsafe { static_field(env, core_class, "b")? };
-    let flow = unsafe { invoke(env, core, "S", &[])? };
-    let state = unsafe { call_object(env, flow, "getValue", "()Ljava/lang/Object;", &[])? };
-    Ok(unsafe { object_text(env, state)? }.eq_ignore_ascii_case("connected"))
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    unsafe { call_static_boolean(env, resolver, "locoConnected", "()Z", &[]) }
 }
 
 unsafe fn find_room(env: *mut JNIEnv, room: i64) -> Result<jobject, String> {
-    let roots = unsafe { app_class(env, "Yr.c1")? };
-    let holder = unsafe { static_field(env, roots, "n")? };
-    let repository = unsafe { invoke(env, holder, "j", &[])? };
-    let room_value = unsafe { box_long(env, room)? };
-    let result = unsafe { invoke(env, repository, "d0", &[room_value])? };
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let result = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "findRoom",
+            "(J)Ljava/lang/Object;",
+            &[long_value(room)],
+        )?
+    };
     if result.is_null() {
         Err(format!("chat room not found: {room}"))
     } else {
@@ -675,6 +682,20 @@ unsafe fn resolve_loco_hooks(env: *mut JNIEnv) -> Result<LocoHooks, String> {
     })
 }
 
+unsafe fn verify_signature_discovery(env: *mut JNIEnv) -> Result<String, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let description = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "verifySignatures",
+            "()Ljava/lang/String;",
+            &[],
+        )?
+    };
+    unsafe { java_string(env, description.cast()) }
+}
+
 unsafe fn find_exact_method(
     env: *mut JNIEnv,
     class: jclass,
@@ -740,6 +761,82 @@ unsafe fn app_class(env: *mut JNIEnv, name: &str) -> Result<jclass, String> {
         .get()
         .ok_or_else(|| "native runtime is not initialized".to_string())?;
     unsafe { load_class(env, runtime.loader as jobject, name) }
+}
+
+unsafe fn signature_class(env: *mut JNIEnv, role: &str) -> Result<jclass, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let role = unsafe { new_string(env, role)? };
+    let class = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "classFor",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[object_value(role)],
+        )?
+    };
+    if class.is_null() {
+        Err("signature resolver returned a null class".to_string())
+    } else {
+        Ok(class.cast())
+    }
+}
+
+unsafe fn signature_object(env: *mut JNIEnv, role: &str) -> Result<jobject, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let role = unsafe { new_string(env, role)? };
+    unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "objectFor",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[object_value(role)],
+        )
+    }
+}
+
+unsafe fn signature_static_value(
+    env: *mut JNIEnv,
+    role: &str,
+    type_name: &str,
+) -> Result<jobject, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let role = unsafe { new_string(env, role)? };
+    let type_name = unsafe { new_string(env, type_name)? };
+    unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "staticValueFor",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+            &[object_value(role), object_value(type_name)],
+        )
+    }
+}
+
+unsafe fn invoke_signature_operation(
+    env: *mut JNIEnv,
+    operation: &str,
+    target: jobject,
+    arguments: &[jobject],
+) -> Result<jobject, String> {
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let operation = unsafe { new_string(env, operation)? };
+    let arguments = unsafe { object_array(env, arguments)? };
+    unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "invokeOperation",
+            "(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
+            &[
+                object_value(operation),
+                object_value(target),
+                object_value(arguments.cast()),
+            ],
+        )
+    }
 }
 
 unsafe fn load_class(env: *mut JNIEnv, loader: jobject, name: &str) -> Result<jclass, String> {
@@ -867,57 +964,6 @@ unsafe fn instance_field_by_type(
     Err(format!("instance field of type {type_name} was not found"))
 }
 
-unsafe fn static_object_with_method(
-    env: *mut JNIEnv,
-    class: jclass,
-    name: &str,
-    arity: i32,
-) -> Result<jobject, String> {
-    let fields = unsafe {
-        call_object(
-            env,
-            class,
-            "getDeclaredFields",
-            "()[Ljava/lang/reflect/Field;",
-            &[],
-        )? as jobjectArray
-    };
-    let count = unsafe { ((**env).v1_4.GetArrayLength)(env, fields) };
-    unsafe { check(env, "read static fields")? };
-    for index in 0..count {
-        let field = unsafe { ((**env).v1_4.GetObjectArrayElement)(env, fields, index) };
-        unsafe { check(env, "read static field")? };
-        let modifiers = unsafe { call_int(env, field, "getModifiers", "()I", &[])? };
-        let modifier = unsafe { find_class(env, "java/lang/reflect/Modifier")? };
-        let is_static = unsafe {
-            call_static_boolean(env, modifier, "isStatic", "(I)Z", &[int_value(modifiers)])?
-        };
-        if !is_static {
-            continue;
-        }
-        unsafe { call_void(env, field, "setAccessible", "(Z)V", &[bool_value(true)])? };
-        let value = unsafe {
-            call_object(
-                env,
-                field,
-                "get",
-                "(Ljava/lang/Object;)Ljava/lang/Object;",
-                &[object_value(ptr::null_mut())],
-            )?
-        };
-        if value.is_null() {
-            continue;
-        }
-        let value_class = unsafe { ((**env).v1_4.GetObjectClass)(env, value) };
-        if unsafe { find_method(env, value_class, name, arity)? }.is_some() {
-            return Ok(value);
-        }
-    }
-    Err(format!(
-        "static companion with {name}/{arity} was not found"
-    ))
-}
-
 unsafe fn invoke(
     env: *mut JNIEnv,
     target: jobject,
@@ -1003,29 +1049,12 @@ unsafe fn box_long(env: *mut JNIEnv, value: i64) -> Result<jobject, String> {
     }
 }
 
-unsafe fn box_boolean(env: *mut JNIEnv, value: bool) -> Result<jobject, String> {
-    let class = unsafe { find_class(env, "java/lang/Boolean")? };
-    unsafe {
-        call_static_object(
-            env,
-            class,
-            "valueOf",
-            "(Z)Ljava/lang/Boolean;",
-            &[bool_value(value)],
-        )
-    }
-}
-
 unsafe fn unbox_long(env: *mut JNIEnv, value: jobject) -> Result<i64, String> {
     unsafe { call_long(env, value, "longValue", "()J", &[]) }
 }
 
 unsafe fn unbox_number(env: *mut JNIEnv, value: jobject) -> Result<i32, String> {
     unsafe { call_int(env, value, "intValue", "()I", &[]) }
-}
-
-unsafe fn unbox_boolean(env: *mut JNIEnv, value: jobject) -> Result<bool, String> {
-    unsafe { call_boolean(env, value, "booleanValue", "()Z", &[]) }
 }
 
 unsafe fn object_text(env: *mut JNIEnv, value: jobject) -> Result<String, String> {

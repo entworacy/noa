@@ -3,50 +3,23 @@ use std::ptr;
 use jni::sys::{JNIEnv, jobject};
 
 use crate::{
-    OpenChatJoinResult, app_class, box_long, call_boolean, call_object, call_static_object,
-    find_class, find_room, invoke, new_object, new_string, object_text, object_value, static_field,
-    static_object_with_method, unbox_boolean, unbox_long,
+    OpenChatJoinResult, box_long, call_static_boolean, call_static_object, find_class, find_room,
+    invoke, invoke_signature_operation, new_object, new_string, object_text, object_value,
+    signature_class, signature_object, unbox_long,
 };
 
-unsafe fn cached_open_profile_url(env: *mut JNIEnv, link: i64) -> Result<Option<String>, String> {
-    let manager_class = unsafe { app_class(env, "UV.h")? };
-    let manager = unsafe { static_field(env, manager_class, "C")? };
-    let link_value = unsafe { box_long(env, link)? };
-    let open_link = unsafe { invoke(env, manager, "d", &[link_value])? };
-    if open_link.is_null() {
-        return Ok(None);
-    }
-    let url_object = unsafe { invoke(env, open_link, "getUrl", &[])? };
-    if url_object.is_null() {
-        return Ok(None);
-    }
-    let url = unsafe { object_text(env, url_object)? };
-    if !is_open_profile_url(&url) {
-        return Ok(None);
-    }
-    Ok(Some(url))
-}
-
 pub(crate) unsafe fn load_open_profile_url(env: *mut JNIEnv, link: i64) -> Result<String, String> {
-    if let Some(url) = unsafe { cached_open_profile_url(env, link)? } {
-        return Ok(url);
-    }
-    let repository_class = unsafe { app_class(env, "IW.b")? };
-    let repository = unsafe { static_field(env, repository_class, "a")? };
-    let link_value = unsafe { box_long(env, link)? };
-    let response = unsafe { invoke(env, repository, "e", &[link_value, ptr::null_mut()])? };
-    if response.is_null() {
-        return Err(format!("open profile response was empty: {link}"));
-    }
-    let open_link = unsafe { invoke(env, response, "d", &[])? };
-    if open_link.is_null() {
-        return Err(format!("open profile link was not found: {link}"));
-    }
-    let url_object = unsafe { invoke(env, open_link, "j", &[])? };
-    if url_object.is_null() {
-        return Err(format!("open profile URL was not found: {link}"));
-    }
-    let url = unsafe { object_text(env, url_object)? };
+    let resolver = unsafe { crate::app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let url = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "openProfileUrl",
+            "(J)Ljava/lang/String;",
+            &[crate::long_value(link)],
+        )?
+    };
+    let url = unsafe { object_text(env, url)? };
     if !is_open_profile_url(&url) {
         return Err(format!("invalid open profile URL for link: {link}"));
     }
@@ -84,14 +57,14 @@ pub(crate) unsafe fn join_open_chat(
     nickname: &str,
     profile_image_url: Option<&str>,
 ) -> Result<OpenChatJoinResult, String> {
-    let connection_class = unsafe { app_class(env, "VU.e")? };
-    let connection_companion = unsafe { static_object_with_method(env, connection_class, "c", 2)? };
+    let connection_class = unsafe { signature_class(env, "open-link-connection")? };
+    let connection_companion = unsafe { signature_object(env, "open-link-connection")? };
     let url_value = unsafe { new_string(env, url)? };
     let intent = unsafe {
-        invoke(
+        invoke_signature_operation(
             env,
+            "open-link-join-intent",
             connection_companion,
-            "c",
             &[url_value.cast(), ptr::null_mut()],
         )?
     };
@@ -106,22 +79,34 @@ pub(crate) unsafe fn join_open_chat(
             &[object_value(intent)],
         )?
     };
-    let response = unsafe { invoke(env, connection, "f", &[])? };
+    let response = unsafe {
+        invoke_signature_operation(env, "open-link-connection-response", connection, &[])?
+    };
     if response.is_null() {
         return Err("open chat join information was empty".to_string());
     }
-    let loco_open_link = unsafe { invoke(env, response, "d", &[])? };
-    if loco_open_link.is_null() {
-        return Err("open chat link information was empty".to_string());
-    }
-    let open_link_class = unsafe { app_class(env, "com.kakao.talk.openlink.db.model.OpenLink")? };
-    let open_link_companion = unsafe { static_object_with_method(env, open_link_class, "c", 1)? };
-    let open_link = unsafe { invoke(env, open_link_companion, "c", &[loco_open_link])? };
+    let resolver = unsafe { crate::app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let open_link = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "convertOpenLink",
+            "(Ljava/lang/Object;)Ljava/lang/Object;",
+            &[object_value(response)],
+        )?
+    };
     if open_link.is_null() {
         return Err("open chat link conversion returned empty data".to_string());
     }
-    let is_open_profile = unsafe { invoke(env, open_link, "e", &[])? };
-    if unsafe { unbox_boolean(env, is_open_profile)? } {
+    if unsafe {
+        call_static_boolean(
+            env,
+            resolver,
+            "isOpenProfile",
+            "(Ljava/lang/Object;)Z",
+            &[object_value(open_link)],
+        )?
+    } {
         return Err("the supplied URL is an open profile, not an open chat".to_string());
     }
     let resolved_url = unsafe { invoke(env, open_link, "getUrl", &[])? };
@@ -133,21 +118,37 @@ pub(crate) unsafe fn join_open_chat(
     if room_name.trim().is_empty() {
         return Err("open chat room name was empty".to_string());
     }
-    let link_id = unsafe { unbox_long(env, invoke(env, open_link, "w", &[])?)? };
+    let link_id = unsafe {
+        unbox_long(
+            env,
+            call_static_object(
+                env,
+                resolver,
+                "openLinkId",
+                "(Ljava/lang/Object;)Ljava/lang/Long;",
+                &[object_value(open_link)],
+            )?,
+        )?
+    };
     if link_id <= 0 {
         return Err("open chat link ID was invalid".to_string());
     }
 
-    let manager_class = unsafe { app_class(env, "UV.h")? };
-    let manager = unsafe { static_field(env, manager_class, "C")? };
-    unsafe { invoke(env, manager, "a0", &[open_link])? };
+    let manager = unsafe { signature_object(env, "open-link-manager")? };
+    unsafe { invoke_signature_operation(env, "open-link-cache", manager, &[open_link])? };
 
-    let roots = unsafe { app_class(env, "Yr.c1")? };
-    let holder = unsafe { static_field(env, roots, "n")? };
-    let repository = unsafe { invoke(env, holder, "j", &[])? };
-    if let Some(room) = unsafe { find_active_open_chat(env, repository, link_id)? } {
-        let actual_link_id = unsafe { unbox_long(env, invoke(env, room, "J0", &[])?)? };
-        if actual_link_id != link_id {
+    let repository = unsafe { signature_object(env, "room-manager")? };
+    let existing = unsafe {
+        call_static_object(
+            env,
+            resolver,
+            "findOpenChatRoom",
+            "(J)Ljava/lang/Object;",
+            &[crate::long_value(link_id)],
+        )?
+    };
+    if !existing.is_null() {
+        if !unsafe { room_has_link(env, resolver, existing, link_id)? } {
             return Err("existing open chat link verification failed".to_string());
         }
         return Ok(OpenChatJoinResult {
@@ -159,27 +160,37 @@ pub(crate) unsafe fn join_open_chat(
     let profile = unsafe {
         create_open_chat_profile(env, profile_id, profile_kind, nickname, profile_image_url)?
     };
-    unsafe { invoke(env, manager, "Z", &[open_link, profile])? };
-    let pre_chat = unsafe {
-        invoke(
+    unsafe {
+        invoke_signature_operation(
             env,
+            "apply-open-profile",
+            manager,
+            &[open_link, profile],
+        )?
+    };
+    let pre_chat = unsafe {
+        invoke_signature_operation(
+            env,
+            "create-open-chat",
             repository,
-            "W",
             &[open_link, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()],
         )?
     };
     if pre_chat.is_null() {
         return Err("open chat pre-chat room was not created".to_string());
     }
-    let join_class = unsafe { app_class(env, "Yr.l0")? };
-    let join_manager = unsafe { static_object_with_method(env, join_class, "s0", 1)? };
-    let chat_id = unsafe { unbox_long(env, invoke(env, join_manager, "s0", &[pre_chat])?)? };
+    let join_manager = unsafe { signature_object(env, "room-api")? };
+    let chat_id = unsafe {
+        unbox_long(
+            env,
+            invoke_signature_operation(env, "join-link", join_manager, &[pre_chat])?,
+        )?
+    };
     if chat_id <= 0 {
         return Err("JOINLINK returned an invalid chat room ID".to_string());
     }
     let room = unsafe { find_room(env, chat_id)? };
-    let actual_link_id = unsafe { unbox_long(env, invoke(env, room, "J0", &[])?)? };
-    if actual_link_id != link_id {
+    if !unsafe { room_has_link(env, resolver, room, link_id)? } {
         return Err("joined open chat link verification failed".to_string());
     }
     Ok(OpenChatJoinResult {
@@ -188,29 +199,21 @@ pub(crate) unsafe fn join_open_chat(
     })
 }
 
-unsafe fn find_active_open_chat(
+unsafe fn room_has_link(
     env: *mut JNIEnv,
-    repository: jobject,
+    resolver: jni::sys::jclass,
+    room: jni::sys::jobject,
     link_id: i64,
-) -> Result<Option<jobject>, String> {
-    let link_value = unsafe { box_long(env, link_id)? };
-    let rooms = unsafe { invoke(env, repository, "Y", &[link_value])? };
-    if rooms.is_null() {
-        return Ok(None);
+) -> Result<bool, String> {
+    unsafe {
+        call_static_boolean(
+            env,
+            resolver,
+            "hasLongIdentity",
+            "(Ljava/lang/Object;J)Z",
+            &[object_value(room), crate::long_value(link_id)],
+        )
     }
-    let iterator = unsafe { call_object(env, rooms, "iterator", "()Ljava/util/Iterator;", &[])? };
-    while unsafe { call_boolean(env, iterator, "hasNext", "()Z", &[])? } {
-        let room = unsafe { call_object(env, iterator, "next", "()Ljava/lang/Object;", &[])? };
-        if room.is_null() {
-            continue;
-        }
-        let room_id = unsafe { unbox_long(env, invoke(env, room, "q0", &[])?)? };
-        let deactivated = unsafe { unbox_boolean(env, invoke(env, room, "S1", &[])?)? };
-        if room_id > 0 && !deactivated {
-            return Ok(Some(room));
-        }
-    }
-    Ok(None)
 }
 
 unsafe fn create_open_chat_profile(
@@ -222,11 +225,17 @@ unsafe fn create_open_chat_profile(
 ) -> Result<jobject, String> {
     match profile_kind {
         "kakao" => {
-            let profile_class = unsafe { app_class(env, "yU.z$c")? };
-            let companion = unsafe { static_object_with_method(env, profile_class, "a", 2)? };
+            let companion = unsafe { signature_object(env, "open-chat-kakao-profile")? };
             let nickname = unsafe { new_string(env, nickname)? };
             let image = unsafe { new_string(env, profile_image_url.unwrap_or_default())? };
-            unsafe { invoke(env, companion, "a", &[nickname.cast(), image.cast()]) }
+            unsafe {
+                invoke_signature_operation(
+                    env,
+                    "create-kakao-profile",
+                    companion,
+                    &[nickname.cast(), image.cast()],
+                )
+            }
         }
         "open-profile" => {
             let profile_link_id = profile_id
@@ -234,9 +243,8 @@ unsafe fn create_open_chat_profile(
                 .ok()
                 .filter(|value| *value > 0)
                 .ok_or_else(|| "open profile ID must be a positive integer".to_string())?;
-            let profile_class = unsafe { app_class(env, "yU.z$d")? };
-            let companion = unsafe { static_object_with_method(env, profile_class, "a", 2)? };
-            let use_type_class = unsafe { app_class(env, "yU.z$d$b")? };
+            let companion = unsafe { signature_object(env, "open-chat-open-profile")? };
+            let use_type_class = unsafe { signature_class(env, "open-chat-profile-use-type")? };
             let enum_class = unsafe { find_class(env, "java/lang/Enum")? };
             let common_name = unsafe { new_string(env, "COMMON")? };
             let common = unsafe {
@@ -252,7 +260,14 @@ unsafe fn create_open_chat_profile(
                 )?
             };
             let profile_link_id = unsafe { box_long(env, profile_link_id)? };
-            unsafe { invoke(env, companion, "a", &[profile_link_id, common]) }
+            unsafe {
+                invoke_signature_operation(
+                    env,
+                    "create-open-profile",
+                    companion,
+                    &[profile_link_id, common],
+                )
+            }
         }
         _ => Err("unsupported open chat profile kind".to_string()),
     }

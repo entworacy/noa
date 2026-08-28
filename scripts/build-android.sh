@@ -39,6 +39,14 @@ lsplant_version="6.4"
 xdl_version="2.4.0"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+build_revision="${NOA_BUILD_REVISION:-}"
+if [[ -z "$build_revision" ]]; then
+  build_revision="$(git -C "$project_dir" rev-parse --verify HEAD 2>/dev/null || true)"
+fi
+if [[ -z "$build_revision" ]]; then
+  echo "배포 리비전을 확인할 수 없습니다. NOA_BUILD_REVISION을 지정하세요." >&2
+  exit 1
+fi
 
 assert_agent_runtime_resolved() {
   local library="$1"
@@ -196,7 +204,7 @@ for index in "${!abis[@]}"; do
     cargo ndk -t "$abi" -P 26 build --release --manifest-path "$project_dir/iris-agent/Cargo.toml" --locked
   iris_agent="$project_dir/iris-agent/target/$target/release/libnoa_iris_agent.so"
   assert_agent_runtime_resolved "$iris_agent"
-  NOA_FRIDA_CORE_DEVKIT="$frida_core" NOA_KAKAO_AGENT_BLOB="$kakao_agent" NOA_IRIS_AGENT_BLOB="$iris_agent" RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$compiler_runtime" cargo ndk -t "$abi" -P 26 build --release --locked
+  NOA_BUILD_REVISION="$build_revision" NOA_FRIDA_CORE_DEVKIT="$frida_core" NOA_KAKAO_AGENT_BLOB="$kakao_agent" NOA_IRIS_AGENT_BLOB="$iris_agent" RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=$compiler_runtime" cargo ndk -t "$abi" -P 26 build --release --locked
   noa_binary="$project_dir/target/$target/release/noa"
   assert_frida_selinux_patch_linked "$noa_binary"
   cp "$noa_binary" "dist/noa-$abi"

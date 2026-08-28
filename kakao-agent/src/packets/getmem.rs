@@ -1,8 +1,9 @@
 use jni::sys::JNIEnv;
 
 use crate::{
-    app_class, box_long, call_static_object, find_class, invoke, loco_connected, long_value,
-    mark_loaded, new_object, object_text, object_value, static_field, static_object_with_method,
+    app_class, box_long, call_static_object, find_class, invoke_signature_operation,
+    loco_connected, long_value, mark_loaded, new_object, object_text, object_value,
+    signature_object, static_field,
 };
 
 pub(crate) unsafe fn send_getmem(
@@ -15,8 +16,7 @@ pub(crate) unsafe fn send_getmem(
         return Err("KakaoTalk Loco is not connected".to_string());
     }
 
-    let helper_class = unsafe { app_class(env, "Yr.l0")? };
-    let helper = unsafe { static_object_with_method(env, helper_class, "m1", 3)? };
+    let helper = unsafe { signature_object(env, "room-api")? };
     let room_value = unsafe { box_long(env, room)? };
     let user_value = unsafe { box_long(env, user)? };
     let collections_class = unsafe { find_class(env, "java/util/Collections")? };
@@ -40,7 +40,14 @@ pub(crate) unsafe fn send_getmem(
             &[long_value(id as i64), object_value(context)],
         )?
     };
-    let result = unsafe { invoke(env, helper, "m1", &[room_value, users, continuation])? };
+    let result = unsafe {
+        invoke_signature_operation(
+            env,
+            "get-members",
+            helper,
+            &[room_value, users, continuation],
+        )?
+    };
     if result.is_null() || unsafe { object_text(env, result) }? != "COROUTINE_SUSPENDED" {
         mark_loaded(id);
     }
