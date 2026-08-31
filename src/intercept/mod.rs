@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use crate::{model::LocoPacket, settings::Settings};
 use tokio::sync::broadcast;
 
+#[cfg(any(target_os = "android", test))]
+mod loco;
 #[cfg(target_os = "android")]
 mod runtime;
 #[cfg(target_os = "android")]

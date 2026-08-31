@@ -11,7 +11,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -243,12 +243,43 @@ pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), NoaError> {
 }
 
 pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
-    tokio::task::spawn_blocking(move || {
+    let started_at = unix_timestamp_millis();
+    let result = tokio::task::spawn_blocking(move || {
         send_command_blocking(room_id, KakaoAction::KickMember { user_id })
     })
     .await
-    .map_err(|error| NoaError::Internal(error.to_string()))??;
-    Ok(())
+    .map_err(|error| NoaError::Internal(error.to_string()))?;
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            if let Some(detail) = wait_for_kick_rejection(room_id, user_id, started_at).await {
+                warn!(room_id, user_id, %detail, "KakaoTalk 강퇴 서버 거부");
+                Err(NoaError::Forbidden(detail))
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+async fn wait_for_kick_rejection(room_id: i64, user_id: i64, since: i64) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if let Some(detail) = super::loco::kick_failure_detail(room_id, user_id, since) {
+            return Some(detail);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn unix_timestamp_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 pub async fn chat_on_room(room_id: i64) -> Result<(), NoaError> {

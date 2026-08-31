@@ -7,6 +7,9 @@ pub enum NoaError {
     BadRequest(String),
     #[error("인증이 필요합니다")]
     Unauthorized,
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[error("{0}")]
+    Forbidden(String),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -29,6 +32,7 @@ impl ResponseError for NoaError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::AndroidUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
