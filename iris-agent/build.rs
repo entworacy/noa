@@ -1,0 +1,56 @@
+fn main() {
+    let gum = std::env::var("NOA_FRIDA_GUM_DEVKIT")
+        .expect("NOA_FRIDA_GUM_DEVKIT must point to a Frida Gum Android devkit");
+    let shim = std::env::var("NOA_LSPLANT_SHIM")
+        .expect("NOA_LSPLANT_SHIM must point to the LSPlant shim archive");
+    let lsplant = std::env::var("NOA_LSPLANT_BLOB")
+        .expect("NOA_LSPLANT_BLOB must point to the LSPlant Android shared library");
+    let cxx_runtime = std::env::var("NOA_CXX_RUNTIME_DIR")
+        .expect("NOA_CXX_RUNTIME_DIR must point to the Android static C++ runtime directory");
+    let compiler_runtime = std::env::var("NOA_COMPILER_RUNTIME")
+        .expect("NOA_COMPILER_RUNTIME must point to the Android compiler runtime");
+
+    for (name, path) in [
+        ("NOA_LSPLANT_SHIM", &shim),
+        ("NOA_LSPLANT_BLOB", &lsplant),
+        ("NOA_COMPILER_RUNTIME", &compiler_runtime),
+    ] {
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "{name} not found: {path}"
+        );
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    assert!(
+        std::path::Path::new(&cxx_runtime).join("libc++_static.a").is_file()
+            && std::path::Path::new(&cxx_runtime).join("libc++abi.a").is_file(),
+        "Android static C++ runtime archives not found in: {cxx_runtime}"
+    );
+    println!("cargo:rerun-if-env-changed=NOA_CXX_RUNTIME_DIR");
+    let gum_archive = std::path::Path::new(&gum).join("libfrida-gum.a");
+    assert!(
+        gum_archive.is_file(),
+        "Frida Gum archive not found: {}",
+        gum_archive.display()
+    );
+    let shim_directory = std::path::Path::new(&shim)
+        .parent()
+        .expect("LSPlant shim path has no parent");
+
+    println!("cargo:rustc-env=NOA_LSPLANT_BLOB={lsplant}");
+    println!(
+        "cargo:rustc-link-search=native={}",
+        shim_directory.display()
+    );
+    println!("cargo:rustc-link-search=native={gum}");
+    println!("cargo:rustc-link-lib=static=noa_lsplant_shim");
+    println!("cargo:rustc-link-lib=static=frida-gum");
+    println!("cargo:rustc-link-arg={cxx_runtime}/libc++_static.a");
+    println!("cargo:rustc-link-arg={cxx_runtime}/libc++abi.a");
+    println!("cargo:rustc-link-arg={compiler_runtime}");
+    println!("cargo:rustc-link-lib=log");
+    println!("cargo:rustc-link-lib=dl");
+    println!("cargo:rustc-link-lib=m");
+    println!("cargo:rerun-if-changed=native/lsplant_shim.cpp");
+    println!("cargo:rerun-if-changed=native/lsplant_api.hpp");
+}

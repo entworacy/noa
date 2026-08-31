@@ -1,0 +1,118 @@
+Noa License 1.0
+31 August 2026
+
+Copyright (c) 2026 Entworacy <entworacy@gmail.com>. All rights reserved.
+
+1. Definitions
+
+"Software" means the Noa source code, object code, documentation, and other
+materials distributed with this license, including modifications and works
+derived from them. Software does not include Third-Party Materials identified
+in the NOTICE file or the licenses directory.
+
+"Licensor" means Entworacy <entworacy@gmail.com>, the copyright owner of the
+Software.
+
+"You" means the individual or legal entity exercising rights under this
+license. If You are a legal entity, Your employees and individual contractors
+may exercise those rights solely on Your behalf and under Your control, and
+You are responsible for their compliance with this license.
+
+"Redistribute" means to provide, publish, disclose, transmit, sublicense,
+sell, lease, assign, transfer, upload, mirror, or otherwise make any copy of
+the Software available to a third party, whether publicly or privately, in
+source or object form, modified or unmodified, and whether for payment or
+without charge.
+
+2. License Grant
+
+Subject to this license, the Licensor grants You a non-exclusive,
+non-transferable, non-sublicensable license to:
+
+  a. obtain and make a reasonable number of copies of the Software;
+  b. use and execute the Software for any lawful purpose;
+  c. inspect, study, modify, and create works derived from the Software; and
+  d. make backup copies of the Software and Your modifications.
+
+You may exercise these rights only for Your own personal use or Your legal
+entity's internal use.
+
+3. No Redistribution
+
+You may not Redistribute the Software or any part of it without the
+Licensor's prior written permission. This prohibition applies to the original
+Software, binaries, source code, modified versions, derivative works,
+packages, archives, public forks, and mirrors.
+
+Without the Licensor's prior written permission, You may not:
+
+  a. incorporate, bundle, package, or include the Noa executable binary
+     itself, whether modified or unmodified, in another project, product,
+     repository, installer, package, archive, or distribution that is made
+     available to a third party;
+  b. sell, resell, rent, lease, sublicense, or otherwise receive payment or
+     other consideration for providing the Software or any copy of it; or
+  c. offer a paid download, paid installation, paid license, or other paid
+     transfer of the Software, whether modified or unmodified.
+
+Operating a service with the Software, without transferring or making a copy
+of the Software available to a third party, is not by itself Redistribution.
+A private copy or fork accessible only within Your legal entity is permitted
+under Section 2.
+
+4. Conditions and Reserved Rights
+
+You must keep this license and all copyright, attribution, and third-party
+notices with every permitted copy of the Software.
+
+You may not sublicense or transfer this license. This license grants no right
+to use the Licensor's names, logos, or trademarks. No patent license or other
+right is granted except as expressly stated here. The Licensor reserves all
+rights not expressly granted by this license.
+
+5. Third-Party Materials
+
+Third-Party Materials remain subject to their own license terms. Those terms
+may grant rights, including redistribution rights, that differ from this
+license. This license does not restrict rights granted directly by the
+copyright holders of Third-Party Materials. See NOTICE and the licenses
+directory for details.
+
+6. Termination
+
+Your rights under this license terminate automatically when You violate any
+of its terms. If this is Your first violation and You cure it completely
+within 30 days after receiving written notice from the Licensor, Your rights
+are reinstated automatically. Otherwise, reinstatement requires the
+Licensor's prior written permission. Sections 3 through 10 survive termination.
+
+7. Disclaimer of Warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED "AS IS" AND
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR
+STATUTORY, INCLUDING WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY,
+OR FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE FOR YOUR USE
+OF THE SOFTWARE.
+
+8. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR WILL NOT BE LIABLE FOR
+ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES,
+OR ANY LOSS OF DATA, PROFITS, GOODWILL, OR BUSINESS INTERRUPTION, ARISING FROM
+OR RELATED TO THE SOFTWARE OR THIS LICENSE, UNDER ANY LEGAL THEORY, EVEN IF
+THE LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+9. Severability and Waiver
+
+If any provision of this license is held unenforceable, it will be limited to
+the minimum extent necessary and the remaining provisions will remain in
+effect. A failure to enforce any provision is not a waiver of that provision
+or any other provision.
+
+10. Previously Granted Rights
+
+This license does not revoke rights that were already granted for a copy of
+Noa under the license terms that accompanied that copy. Those terms apply
+only to the versions and materials for which they were originally granted.
+This license applies to each version or revision of Noa that includes this
+license text.
