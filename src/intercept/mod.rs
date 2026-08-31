@@ -196,6 +196,125 @@ pub async fn join_open_chat(
     runtime::join_open_chat(url, profile_id, profile_kind, nickname, profile_image_url).await
 }
 
+pub async fn vox_start_call(
+    room_id: i64,
+    caller_id: i64,
+    peer_ids: Vec<i64>,
+    open_chat: bool,
+    team_chat: bool,
+    group_chat: bool,
+) -> Result<(), crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_start_call(
+            room_id, caller_id, peer_ids, open_chat, team_chat, group_chat,
+        )
+        .await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (
+            room_id, caller_id, peer_ids, open_chat, team_chat, group_chat,
+        );
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_create_room(room_id: i64, title: String) -> Result<(), crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_create_room(room_id, title).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (room_id, title);
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_join_room(
+    room_id: i64,
+    call_id: i64,
+    host_v4: String,
+    host_v6: String,
+    port: i32,
+) -> Result<(), crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_join_room(room_id, call_id, host_v4, host_v6, port).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (room_id, call_id, host_v4, host_v6, port);
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_leave(room_id: i64, kind: String) -> Result<(), crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_leave(room_id, kind).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (room_id, kind);
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_status() -> Result<serde_json::Value, crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_status().await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_audio_start(mode: String) -> Result<serde_json::Value, crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_audio_start(mode).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = mode;
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_audio_push(bytes: Vec<u8>) -> Result<serde_json::Value, crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_audio_push(bytes).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bytes;
+        Err(vox_unavailable())
+    }
+}
+
+pub async fn vox_audio_stop() -> Result<serde_json::Value, crate::failure::NoaError> {
+    #[cfg(target_os = "android")]
+    {
+        runtime::vox_audio_stop().await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err(vox_unavailable())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn vox_unavailable() -> crate::failure::NoaError {
+    crate::failure::NoaError::AndroidUnavailable(
+        "VOX 후킹은 Android에서만 사용할 수 있습니다".to_string(),
+    )
+}
+
 #[cfg(not(target_os = "android"))]
 #[allow(dead_code)]
 pub async fn share_open_profile(_: i64) -> Result<String, crate::failure::NoaError> {

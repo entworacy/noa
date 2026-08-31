@@ -81,20 +81,9 @@ final class KakaoOperationResolver {
             }
         }
         if ("load-sending-log".equals(operation)) {
-            Method matched = null;
-            for (Method method : target.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (Modifier.isStatic(method.getModifiers())
-                        || parameters.length != 1
-                        || !"kotlin.coroutines.Continuation".equals(parameters[0].getName())
-                        || method.getReturnType() != Object.class) {
-                    continue;
-                }
-                if (matched != null) {
-                    throw new NoSuchMethodException("ambiguous sending-log load signature");
-                }
-                matched = method;
-            }
+            Method matched = KotlinSuspendResolver.uniqueInstanceMethodReturning(
+                target, "sending-log load", "kotlin.Unit"
+            );
             if (matched != null) {
                 return matched;
             }

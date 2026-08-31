@@ -8,7 +8,7 @@ Noa는 목적이 다른 세 어댑터를 사용합니다.
 
 | 에이전트 | 실행 위치 | 역할 |
 |---|---|---|
-| Kakao agent | KakaoTalk 프로세스 | 내부 명령, LOCO 관찰, Room invalidation |
+| Kakao agent | KakaoTalk 프로세스 | 내부 명령, LOCO·Room 관찰, VOX 제어와 송신 PCM 후킹 |
 | Iris agent | Iris 프로세스 | `/reply` 가로채기와 `/noa` gateway |
 | UI agent | 별도 UiAutomator 프로세스 | 화면 요소 탐색, 클릭, 상태 확인 |
 
@@ -33,6 +33,8 @@ Kakao agent는 현재 Android JavaVM을 찾고 스레드를 attach한 뒤 내장
 - 선택적 CHATONROOM 호출
 - LOCO 송수신 packet capture
 - Room database invalidation callback 전달
+- 일반 보이스톡·오픈채팅 보이스룸 생성/입장/종료
+- VOX WebRTC 마이크 frame에 명시적으로 공급된 PCM 교체 또는 혼합
 
 KakaoTalk 내부 클래스와 메서드는 난독화될 수 있으므로 호출 전에 reflection으로 정확한 parameter type과 arity를 검사합니다. 결과 객체와 식별자도 null, 양수 범위, 요청값 일치 여부를 단계마다 확인합니다.
 
@@ -41,6 +43,19 @@ KakaoTalk 내부 클래스와 메서드는 난독화될 수 있으므로 호출 
 hook callback은 JNI 객체에서 header와 body를 추출해 구조화된 JSON 값으로 bounded queue에 넣습니다. 네트워크 송신 스레드는 token과 event type을 추가해 Noa의 event listener로 전송합니다. 캡처 스레드는 가득 찬 큐를 기다리지 않고 이벤트를 버릴 수 있어 KakaoTalk 실행 스레드를 막지 않습니다.
 
 Noa는 최근 packet을 제한된 메모리 deque에 저장하고 `/api/loco`와 `/loco`에서 제공합니다. 이 기능은 진단용이며 완전한 패킷 보존이나 감사 로그를 보장하지 않습니다.
+
+## VOX 제어와 오디오 송출
+
+VOX 기능은 base의 `VoxModuleFacade` 계약, `vox_main` manager, `com.kakao.vox` SDK, WebRTC 순으로 내려가는 경계를 사용합니다. Java 어댑터는 Kakao 객체·callback과 UI 전환을 담당하고, Rust 에이전트는 명령 수명과 bounded PCM queue, JNI buffer 처리를 담당합니다. HTTP 검증과 KakaoTalk DB 조회는 호스트 Rust 서비스에만 둬 한 파일이나 한 언어에 역할이 몰리지 않게 분리합니다.
+
+일반 보이스톡은 요청 직전 DB의 활성 참여자를 다시 확인해 caller와 peer 목록을 구성합니다. 오픈채팅 보이스룸 생성은 `OM` 방만 허용합니다. 입장에 필요한 `callId`, `csIP`, `csIP6`, `csPort`는 HTTP 요청에서 받지 않고 최신 type 52 `vr_invite` chat log에서 읽습니다. 최신 VOX log가 `vr_bye`이면 과거 초대 주소를 재사용하지 않습니다.
+
+오디오 hook은 `AudioRecord.read(ByteBuffer, int)`의 원본 호출이 끝난 뒤 `AudioRecordJavaThread`에서만 활성화됩니다. 송출을 명시적으로 시작하지 않은 상태에서는 buffer를 전혀 바꾸지 않습니다. 형식은 48 kHz, mono, signed 16-bit little-endian PCM입니다.
+
+- `replace`: 공급 PCM으로 마이크 frame을 교체합니다. queue가 비면 남은 부분을 0으로 채워 실제 마이크 음성이 새지 않습니다.
+- `mix`: 실제 마이크 sample과 공급 PCM을 포화 덧셈합니다. queue가 비면 원래 마이크 sample을 유지합니다.
+
+queue는 192,000바이트로 제한하며 넘치면 지연 누적 대신 가장 오래된 PCM을 버립니다. 한 push는 최대 96,000바이트이고 완전한 16-bit sample이어야 합니다. VOX hook 설치 실패는 채팅·LOCO hook 전체를 실패시키지 않지만 VOX audio 시작은 거부합니다.
 
 ## 접근성 경로
 
@@ -83,5 +98,7 @@ Noa는 최근 packet을 제한된 메모리 deque에 저장하고 `/api/loco`와
 | 프로필 공유 | 내부 조회 또는 UI + 검증 | UI + 검증 |
 | 참여자 강퇴 | 내부 manager + DB 검증 | UI + DB 검증 |
 | 채팅방 나가기 | 의미 기반 UI | 의미 기반 UI |
+| 보이스톡·보이스룸 | VOX manager + DB 대상 검증 | 지원하지 않음 (`503`) |
+| PCM 음성 송출 | VOX WebRTC capture 후킹 | 지원하지 않음 (`503`) |
 
 후킹을 명시적으로 요청했는데 agent가 준비되지 않은 경우 접근성 경로로 조용히 전환하지 않습니다. 호출자가 실행 방식과 중복 실행 위험을 정확히 알 수 있도록 `503` 오류를 반환합니다.

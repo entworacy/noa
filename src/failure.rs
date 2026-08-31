@@ -9,6 +9,8 @@ pub enum NoaError {
     Unauthorized,
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
     #[error("Android 전송 기능을 사용할 수 없습니다: {0}")]
     AndroidUnavailable(String),
     #[error("{0}")]
@@ -28,6 +30,7 @@ impl ResponseError for NoaError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::AndroidUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

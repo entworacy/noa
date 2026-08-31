@@ -18,7 +18,7 @@ const AGENT_PATH: &str = "/data/local/tmp/noa-uiautomator.jar";
 const AGENT_STAGING_PATH: &str = "/data/local/tmp/noa-uiautomator.jar.install";
 const AGENT_LOG_PATH: &str = "/data/local/tmp/noa-uiautomator.log";
 const AGENT_CLASS: &str = "dev.noa.UiAgent";
-const AGENT_VERSION: &str = "NOA_UI_32";
+const AGENT_VERSION: &str = "NOA_UI_37";
 const AGENT_PORT: u16 = 47123;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -34,7 +34,8 @@ pub enum TextClickResult {
 }
 
 pub enum ResendTargetClickResult {
-    Clicked,
+    ClickedConfirmation,
+    ClickedDirect,
     NotFound,
     Ambiguous,
 }
@@ -310,7 +311,10 @@ pub fn click_resend_target(
         format!("CLICK_RESEND_TARGET {timeout_ms} {encoded}")
     };
     match request_with_timeout(&command, timeout + Duration::from_secs(1)) {
-        Ok(response) if response == "OK" => Ok(ResendTargetClickResult::Clicked),
+        Ok(response) if response == "CONFIRM" || response == "OK" => {
+            Ok(ResendTargetClickResult::ClickedConfirmation)
+        }
+        Ok(response) if response == "DIRECT" => Ok(ResendTargetClickResult::ClickedDirect),
         Ok(response) if response == "NOT_FOUND" => Ok(ResendTargetClickResult::NotFound),
         Ok(response) if response == "AMBIGUOUS" => Ok(ResendTargetClickResult::Ambiguous),
         Ok(response) => Err(format!(
@@ -618,8 +622,11 @@ fn launch_agent() -> Result<(), String> {
     let su = su_executable();
     tracing::info!(executable = su, "UiAutomator 에이전트 su 실행 경로 선택");
     Command::new(su)
+        // The Android wrapper rewrites ANDROID_DATA for the shell UID and then
+        // UiDevice appends local/tmp again. Root preserves the canonical /data base.
+        .env("ANDROID_DATA", "/data")
         .args([
-            "shell",
+            "root",
             "/system/bin/uiautomator",
             "runtest",
             AGENT_PATH,

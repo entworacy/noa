@@ -7,6 +7,12 @@ use std::{
 
 use crate::failure::NoaError;
 
+mod resend;
+mod tree;
+#[cfg_attr(not(target_os = "android"), allow(unused_imports))]
+pub use resend::resend;
+use tree::{UiNode, parse_nodes};
+
 // dump 파일 1개를 계속 덮어써서 화면당 임시 파일 증가는 0개로 확인 test24
 const UI_DUMP: &str = "/data/local/tmp/noa-accessibility.xml";
 // 1000 / 16 = 초당 최대 62회 확인이고 실제 37ms dump까지 합치면 초당 약 18회 예상 test25
@@ -19,7 +25,6 @@ const LEAVE_CHATROOM_LABELS: LabelPair = ["채팅방 나가기", "Leave chatroom
 const LEAVE_LABELS: LabelPair = ["나가기", "Leave"];
 const KICK_MEMBER_LABELS: LabelPair = ["대화상대 내보내기", "Send out participant"];
 const REMOVE_LABELS: LabelPair = ["내보내기", "Remove"];
-const RESEND_LABELS: LabelPair = ["재전송", "Re-send"];
 #[cfg(not(target_os = "android"))]
 const EXPAND_MEMBER_LABELS: LabelPair = ["펼치기", "Expand"];
 #[cfg(not(target_os = "android"))]
@@ -33,7 +38,6 @@ const KAKAO_PACKAGE: &str = "com.kakao.talk";
 const CHAT_ACTIVITY: &str = "com.kakao.talk/.activity.RecentExcludeIntentFilterActivity";
 const CHAT_ACTION: &str = "com.kakao.talk.intent.action.ENTER_CHAT_ROOM";
 const CHAT_TITLE_ID: &str = "com.kakao.talk:id/toolbar_default_title_text";
-const RESEND_INDICATOR_ID: &str = "com.kakao.talk:id/resend_indicator";
 const OPEN_PROFILE_ACTIVITY: &str =
     "com.kakao.talk/com.kakao.talk.openlink.openprofile.viewer.OlkOpenProfileViewerActivity";
 const OPEN_PROFILE_NAME_ID: &str = "com.kakao.talk.openlink:id/name";
@@ -637,169 +641,6 @@ fn member_info_matches(nodes: &[UiNode], expected_room_name: &str) -> bool {
         .any(|node| node.class_name.ends_with("TextView") && node.text.trim() == expected_room_name)
 }
 
-pub fn resend(
-    room_id: i64,
-    profile: i32,
-    expected_room_name: &str,
-    message: &str,
-    attachment: &str,
-) -> Result<(), NoaError> {
-    let started = Instant::now();
-    let profile = profile.to_string();
-    let room = room_id.to_string();
-    run(
-        "/system/bin/am",
-        &[
-            "start",
-            "--user",
-            &profile,
-            "-S",
-            "-n",
-            CHAT_ACTIVITY,
-            "-a",
-            CHAT_ACTION,
-            "-f",
-            "335544320",
-            "--el",
-            "chatRoomId",
-            &room,
-        ],
-    )?;
-    let activity_ms = started.elapsed().as_millis();
-    let stage = Instant::now();
-    verify_resend_room(expected_room_name)?;
-    let room_verification_ms = stage.elapsed().as_millis();
-    let stage = Instant::now();
-    click_matching_resend_indicator(message, attachment)?;
-    let indicator_click_ms = stage.elapsed().as_millis();
-    let stage = Instant::now();
-
-    #[cfg(target_os = "android")]
-    let confirmation_mode = match super::ui_agent::click_resend_confirmation() {
-        Ok(true) => "agent",
-        Ok(false) => {
-            return Err(NoaError::AndroidUnavailable(
-                "재전송 확인 버튼을 찾지 못했습니다".to_string(),
-            ));
-        }
-        Err(error) => {
-            tracing::warn!(%error, "재전송 확인 버튼 빠른 선택 실패, 화면 덤프로 전환합니다");
-            "xml"
-        }
-    };
-    #[cfg(not(target_os = "android"))]
-    let confirmation_mode = "xml";
-
-    if confirmation_mode == "xml" {
-        let confirmation = wait_for(Duration::from_secs(8), |nodes| {
-            nodes
-                .iter()
-                .filter(|node| matches_label(node, &RESEND_LABELS))
-                .filter_map(|node| node.bounds)
-                .next()
-        })
-        .ok_or_else(|| {
-            NoaError::AndroidUnavailable("재전송 확인 버튼을 찾지 못했습니다".to_string())
-        })?;
-        tap_labeled(confirmation, &RESEND_LABELS)?;
-    }
-
-    tracing::info!(
-        room_id,
-        activity_ms,
-        room_verification_ms,
-        indicator_click_ms,
-        confirmation_ms = stage.elapsed().as_millis(),
-        total_ms = started.elapsed().as_millis(),
-        confirmation_mode,
-        "custom 접근성 재전송 단계별 소요시간"
-    );
-    Ok(())
-}
-
-fn verify_resend_room(expected_room_name: &str) -> Result<(), NoaError> {
-    #[cfg(target_os = "android")]
-    match super::ui_agent::wait_for_resource_text(
-        CHAT_TITLE_ID,
-        expected_room_name,
-        Duration::from_secs(8),
-    ) {
-        Ok(true) => return Ok(()),
-        Ok(false) => {
-            return Err(NoaError::AndroidUnavailable(format!(
-                "재전송할 채팅방 화면을 확인하지 못했습니다: {expected_room_name}"
-            )));
-        }
-        Err(error) => {
-            tracing::warn!(%error, "재전송 채팅방 빠른 검증 실패, 화면 덤프로 전환합니다");
-        }
-    }
-
-    wait_for(Duration::from_secs(8), |nodes| {
-        select_chat_title(nodes)
-            .is_some_and(|title| title.trim() == expected_room_name.trim())
-            .then_some(())
-    })
-    .ok_or_else(|| {
-        NoaError::AndroidUnavailable(format!(
-            "재전송할 채팅방 화면을 확인하지 못했습니다: {expected_room_name}"
-        ))
-    })
-}
-
-fn click_matching_resend_indicator(message: &str, attachment: &str) -> Result<(), NoaError> {
-    #[cfg(target_os = "android")]
-    let mut fallback_timeout = Duration::from_secs(15);
-    #[cfg(not(target_os = "android"))]
-    let fallback_timeout = Duration::from_secs(15);
-    #[cfg(target_os = "android")]
-    match super::ui_agent::click_resend_target(
-        &target_strings(message, attachment),
-        Duration::from_secs(15),
-    ) {
-        Ok(super::ui_agent::ResendTargetClickResult::Clicked) => return Ok(()),
-        Ok(super::ui_agent::ResendTargetClickResult::NotFound) => {
-            tracing::warn!(
-                "대상 메시지 재전송 표시를 빠른 탐색에서 찾지 못해 화면 덤프로 검증합니다"
-            );
-            fallback_timeout = Duration::from_secs(3);
-        }
-        Ok(super::ui_agent::ResendTargetClickResult::Ambiguous) => {
-            tracing::warn!("재전송 표시가 여러 개라 화면 덤프로 대상 버블을 검증합니다");
-            fallback_timeout = Duration::from_secs(3);
-        }
-        Err(error) => {
-            tracing::warn!(%error, "재전송 대상 빠른 선택 실패, 화면 덤프로 전환합니다");
-        }
-    }
-
-    let indicator = wait_for(fallback_timeout, |nodes| {
-        select_indicator(nodes, message, attachment)
-    })
-    .ok_or_else(|| {
-        NoaError::AndroidUnavailable(
-            "대상 메시지와 일치하는 재전송 표시를 찾지 못했습니다".to_string(),
-        )
-    })?;
-    tap_resend_indicator(indicator)
-}
-
-fn tap_resend_indicator(bounds: Bounds) -> Result<(), NoaError> {
-    #[cfg(target_os = "android")]
-    match super::ui_agent::click_resource_at(RESEND_INDICATOR_ID, bounds) {
-        Ok(true) => return Ok(()),
-        Ok(false) => {
-            return Err(NoaError::AndroidUnavailable(
-                "클릭 직전에 재전송 표시가 사라졌습니다".to_string(),
-            ));
-        }
-        Err(error) => {
-            tracing::warn!(%error, "재전송 표시 의미 기반 클릭 실패, 좌표 폴백을 사용합니다");
-        }
-    }
-    tap(bounds)
-}
-
 fn wait_for<T>(timeout: Duration, select: impl Fn(&[UiNode]) -> Option<T>) -> Option<T> {
     // 측정값 37ms dump + 16ms park = 실패 반복 1회당 대략 53ms test32
     let deadline = Instant::now() + timeout;
@@ -1240,34 +1081,6 @@ fn run(program: &str, arguments: &[&str]) -> Result<(), NoaError> {
     )))
 }
 
-#[derive(Default)]
-struct UiNode {
-    resource_id: String,
-    class_name: String,
-    text: String,
-    description: String,
-    clickable: bool,
-    scrollable: bool,
-    bounds: Option<(i32, i32, i32, i32)>,
-}
-
-fn parse_nodes(xml: &str) -> Vec<UiNode> {
-    // node 태그 1개를 UiNode 1개로 바꿔 결과와 유효 태그 개수가 같은지 확인 test41
-    xml.split("<node ")
-        .skip(1)
-        .filter_map(|part| part.split_once('>').map(|value| value.0))
-        .map(|tag| UiNode {
-            resource_id: attribute(tag, "resource-id").unwrap_or_default(),
-            class_name: attribute(tag, "class").unwrap_or_default(),
-            text: attribute(tag, "text").unwrap_or_default(),
-            description: attribute(tag, "content-desc").unwrap_or_default(),
-            clickable: attribute(tag, "clickable").as_deref() == Some("true"),
-            scrollable: attribute(tag, "scrollable").as_deref() == Some("true"),
-            bounds: attribute(tag, "bounds").and_then(|value| parse_bounds(&value)),
-        })
-        .collect()
-}
-
 fn open_chat_scheme(value: &str) -> Result<String, NoaError> {
     let parsed = url::Url::parse(value)
         .map_err(|_| NoaError::BadRequest("올바른 오픈채팅 URL이 아닙니다".to_string()))?;
@@ -1444,144 +1257,6 @@ fn matches_label(node: &UiNode, labels: &[&str]) -> bool {
         .any(|label| node.text == *label || node.description == *label)
 }
 
-fn attribute(tag: &str, name: &str) -> Option<String> {
-    let marker = format!("{name}=\"");
-    let value = tag.split_once(&marker)?.1.split_once('"')?.0;
-    Some(
-        value
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&"),
-    )
-}
-
-fn parse_bounds(value: &str) -> Option<(i32, i32, i32, i32)> {
-    let values: Vec<i32> = value
-        .split(['[', ']', ','])
-        .filter(|value| !value.is_empty())
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .ok()?;
-    // 대괄호 2쌍에서 숫자 4개가 나와야 left top right bottom으로 확정 test44
-    (values.len() == 4).then(|| (values[0], values[1], values[2], values[3]))
-}
-
-fn select_indicator(
-    nodes: &[UiNode],
-    message: &str,
-    attachment: &str,
-) -> Option<(i32, i32, i32, i32)> {
-    let targets = target_strings(message, attachment);
-    let bubbles: Vec<(i32, i32, i32, i32)> = nodes
-        .iter()
-        .filter(|node| node.resource_id == "com.kakao.talk:id/bubble_linearlayout")
-        .filter_map(|node| node.bounds)
-        .collect();
-    let candidates: Vec<(usize, Bounds)> = nodes
-        .iter()
-        .filter(|node| node.resource_id == RESEND_INDICATOR_ID)
-        .filter_map(|indicator| {
-            let bounds = indicator.bounds?;
-            let bubble_bounds = bubbles
-                .iter()
-                .copied()
-                .filter(|bubble| contains(*bubble, bounds))
-                .min_by_key(|bubble| area(*bubble))?;
-            let score = nodes
-                .iter()
-                .filter(|node| {
-                    node.bounds
-                        .is_some_and(|value| contains(bubble_bounds, value))
-                })
-                .flat_map(|node| [&node.text, &node.description])
-                .filter(|value| !value.is_empty())
-                .map(|value| match_score(value, &targets))
-                .sum::<usize>();
-            Some((score, bounds))
-        })
-        .collect();
-    if targets.is_empty() {
-        return match candidates.as_slice() {
-            [(_, bounds)] => Some(*bounds),
-            _ => None,
-        };
-    }
-    candidates
-        .into_iter()
-        .filter(|(score, _)| *score > 0)
-        .max_by_key(|(score, bounds)| (*score, bounds.3))
-        .map(|(_, bounds)| bounds)
-}
-
-fn target_strings(message: &str, attachment: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    push_target(&mut values, message);
-    for part in message.split(|character: char| {
-        character.is_whitespace() || matches!(character, ':' | '#' | ',' | '(' | ')')
-    }) {
-        push_target(&mut values, part);
-    }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(attachment) {
-        collect_json_strings(&value, &mut values);
-    }
-    values.sort();
-    values.dedup();
-    values
-}
-
-fn collect_json_strings(value: &serde_json::Value, output: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(value) => push_target(output, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_json_strings(value, output);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values() {
-                collect_json_strings(value, output);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_target(output: &mut Vec<String>, value: &str) {
-    let value = value.trim();
-    let length = value.chars().count();
-    if (2..=100).contains(&length) && !value.starts_with("http") {
-        output.push(value.to_lowercase());
-    }
-}
-
-fn match_score(value: &str, targets: &[String]) -> usize {
-    // 완전 일치는 1000 + 길이, 부분 일치는 최대 100이라 exact 쪽에 최소 10배 가중치 test45
-    let value = value.trim().to_lowercase();
-    targets
-        .iter()
-        .map(|target| {
-            if value == *target {
-                1_000 + target.chars().count()
-            } else if value.contains(target) || target.contains(&value) {
-                target.chars().count().min(value.chars().count())
-            } else {
-                0
-            }
-        })
-        .max()
-        .unwrap_or_default()
-}
-
-fn contains(outer: (i32, i32, i32, i32), inner: (i32, i32, i32, i32)) -> bool {
-    outer.0 <= inner.0 && outer.1 <= inner.1 && outer.2 >= inner.2 && outer.3 >= inner.3
-}
-
-fn area(bounds: (i32, i32, i32, i32)) -> i64 {
-    i64::from(bounds.2 - bounds.0) * i64::from(bounds.3 - bounds.1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1595,7 +1270,6 @@ mod tests {
             LEAVE_LABELS,
             KICK_MEMBER_LABELS,
             REMOVE_LABELS,
-            RESEND_LABELS,
             EXPAND_MEMBER_LABELS,
             COPY_LABELS,
             PARTICIPANTS_LABELS,
@@ -1632,33 +1306,6 @@ mod tests {
         assert_eq!(nodes[1].text, "Re-send");
         assert_eq!(nodes[1].class_name, "android.widget.Button");
         assert!(nodes[1].clickable);
-    }
-
-    #[test]
-    fn selects_indicator_from_matching_bubble() {
-        let xml = r#"<hierarchy><node resource-id="com.kakao.talk:id/bubble_linearlayout" text="" content-desc="" bounds="[0,10][720,300]"><node resource-id="com.kakao.talk:id/resend_indicator" text="" content-desc="Delete or resend failed message" bounds="[100,250][200,290]"/><node resource-id="" text="서울 날씨" content-desc="" bounds="[220,20][700,240]"/></node><node resource-id="com.kakao.talk:id/bubble_linearlayout" text="" content-desc="" bounds="[0,310][720,1000]"><node resource-id="com.kakao.talk:id/resend_indicator" text="" content-desc="Delete or resend failed message" bounds="[100,940][200,990]"/><node resource-id="" text="샵검색" content-desc="" bounds="[220,330][700,900]"/></node></hierarchy>"#;
-        let nodes = parse_nodes(xml);
-        assert_eq!(
-            select_indicator(&nodes, "서울특별시 내일 날씨", r#"{"title":"서울 날씨"}"#),
-            Some((100, 250, 200, 290))
-        );
-        assert_eq!(
-            select_indicator(&nodes, "샵검색: #샵검색", r#"{"title":"샵검색"}"#),
-            Some((100, 940, 200, 990))
-        );
-        assert_eq!(
-            select_indicator(&nodes, "일치하지 않는 메시지", r#"{"title":"다른 값"}"#),
-            None
-        );
-        assert_eq!(select_indicator(&nodes, "", "{}"), None);
-
-        let single = parse_nodes(
-            r#"<hierarchy><node resource-id="com.kakao.talk:id/bubble_linearlayout" text="" content-desc="" bounds="[0,10][720,300]"><node resource-id="com.kakao.talk:id/resend_indicator" text="" content-desc="Delete or resend failed message" bounds="[100,250][200,290]"/></node></hierarchy>"#,
-        );
-        assert_eq!(
-            select_indicator(&single, "", "{}"),
-            Some((100, 250, 200, 290))
-        );
     }
 
     #[test]

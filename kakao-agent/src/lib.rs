@@ -23,6 +23,7 @@ mod packets;
 mod room;
 mod signature_api;
 mod signature_index;
+mod vox;
 
 pub(crate) use commands::{
     CommandResult, OpenChatJoinResult, Operation, command_operation, mark_complete, mark_loaded,
@@ -40,6 +41,7 @@ const ACTION_KICK: i32 = 2;
 const ACTION_CHATONROOM: i32 = 3;
 const ACTION_LOAD_OPEN_CHAT_MEMBER: i32 = 4;
 const ACTION_INSTALL_ROOM_WATCHER: i32 = 5;
+const ACTION_VOX: i32 = 6;
 const KIND_LOCO_SEND: i32 = 1;
 const KIND_LOCO_RECEIVE: i32 = 2;
 const LOG_INFO: c_int = 4;
@@ -275,6 +277,13 @@ fn initialize_runtime() -> Result<(), String> {
                     1,
                 )
                 .map_err(|error| format!("hook LOCO receive: {error}"))?;
+                match vox::install_hook(env) {
+                    Ok(()) => log(LOG_INFO, "VOX WebRTC audio injection hook ready"),
+                    Err(error) => log(
+                        LOG_ERROR,
+                        &format!("VOX audio hook unavailable; chat hooks remain active: {error}"),
+                    ),
+                }
                 log(
                     LOG_INFO,
                     "Kakao agent initialization: deoptimizing LOCO coroutine",
@@ -447,6 +456,11 @@ unsafe fn initialize_loader(env: *mut JNIEnv, loader: jobject) -> Result<(), Str
             "(Ljava/lang/String;Ljava/lang/String;)V",
             room::invalidated as *mut c_void,
         ),
+        native_method(
+            "processVoxAudio",
+            "(Ljava/nio/ByteBuffer;I)V",
+            vox::process_audio as *mut c_void,
+        ),
     ];
     let status = unsafe {
         ((**env).v1_4.RegisterNatives)(env, bridge, methods.as_ptr(), methods.len() as jint)
@@ -460,6 +474,8 @@ unsafe fn initialize_loader(env: *mut JNIEnv, loader: jobject) -> Result<(), Str
         "dev.noa.kakao.MainDispatch",
         "dev.noa.kakao.Hooker",
         "dev.noa.kakao.RoomWatcher",
+        "dev.noa.kakao.VoxAudioHooker",
+        "dev.noa.kakao.VoxController",
     ] {
         unsafe { load_class(env, loader, name)? };
     }
@@ -504,6 +520,8 @@ unsafe extern "system" fn bridge_dispatch(env: *mut JNIEnv, _: jclass, id: jlong
             })
         }
         ACTION_INSTALL_ROOM_WATCHER => unsafe { room::install(env) },
+        ACTION_VOX => command_operation(id as u64)
+            .and_then(|operation| unsafe { vox::dispatch_main(env, id as u64, operation) }),
         _ => Err("unknown main-thread action".to_string()),
     };
     if action == ACTION_INSTALL_ROOM_WATCHER {

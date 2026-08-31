@@ -30,6 +30,8 @@ use crate::{
 };
 
 mod iris_endpoint;
+mod vox;
+mod vox_audio;
 
 const DASHBOARD: &str = include_str!("../../assets/dashboard.html");
 const LOCO_DASHBOARD: &str = include_str!("../../assets/loco.html");
@@ -73,7 +75,9 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/send", web::post().to(send))
         .route("/send/text", web::post().to(send_text))
         .route("/internal/iris/reply", web::post().to(iris_reply))
-        .configure(iris_endpoint::configure);
+        .configure(iris_endpoint::configure)
+        .configure(vox::configure)
+        .configure(vox_audio::configure);
 }
 
 async fn loco_dashboard() -> impl Responder {
@@ -1546,7 +1550,7 @@ fn parse_user_id(value: &str) -> Result<i64, NoaError> {
         .ok_or_else(|| NoaError::BadRequest(format!("올바르지 않은 userId: {value}")))
 }
 
-fn authorize(req: &HttpRequest, state: &AppState) -> Result<(), NoaError> {
+pub(super) fn authorize(req: &HttpRequest, state: &AppState) -> Result<(), NoaError> {
     let Some(expected) = state.config.api_token.as_deref() else {
         return Ok(());
     };

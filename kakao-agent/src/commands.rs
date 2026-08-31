@@ -7,8 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ACTION_CHATONROOM, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND, actions, packets,
-    post_main, with_env,
+    ACTION_CHATONROOM, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND, ACTION_VOX, actions,
+    packets, post_main, vox, with_env,
 };
 
 #[derive(Deserialize)]
@@ -28,6 +28,24 @@ pub(crate) struct Request {
     nickname: Option<String>,
     #[serde(rename = "profileImageUrl")]
     profile_image_url: Option<String>,
+    caller: Option<i64>,
+    peers: Option<Vec<i64>>,
+    #[serde(rename = "openChat")]
+    open_chat: Option<bool>,
+    #[serde(rename = "teamChat")]
+    team_chat: Option<bool>,
+    #[serde(rename = "groupChat")]
+    group_chat: Option<bool>,
+    title: Option<String>,
+    call: Option<i64>,
+    #[serde(rename = "hostV4")]
+    host_v4: Option<String>,
+    #[serde(rename = "hostV6")]
+    host_v6: Option<String>,
+    port: Option<i32>,
+    kind: Option<String>,
+    mode: Option<String>,
+    audio: Option<String>,
 }
 
 #[derive(Clone)]
@@ -57,6 +75,37 @@ pub(crate) enum Operation {
         nickname: String,
         profile_image_url: Option<String>,
     },
+    VoxStartCall {
+        room: i64,
+        caller: i64,
+        peers: Vec<i64>,
+        open_chat: bool,
+        team_chat: bool,
+        group_chat: bool,
+    },
+    VoxCreateRoom {
+        room: i64,
+        title: String,
+    },
+    VoxJoinRoom {
+        room: i64,
+        call: i64,
+        host_v4: String,
+        host_v6: String,
+        port: i32,
+    },
+    VoxLeave {
+        kind: String,
+        room: i64,
+    },
+    VoxStatus,
+    VoxAudioStart {
+        mode: String,
+    },
+    VoxAudioPush {
+        audio: String,
+    },
+    VoxAudioStop,
 }
 
 #[derive(Serialize)]
@@ -99,6 +148,14 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         Operation::LoadOpenChatMember { .. } => execute_load_open_chat_member(id, &active.state),
         Operation::ShareOpenProfile { .. } => execute_share_open_profile(&active.state),
         Operation::JoinOpenChat { .. } => execute_join_open_chat(&active.state),
+        Operation::VoxStartCall { .. }
+        | Operation::VoxCreateRoom { .. }
+        | Operation::VoxJoinRoom { .. }
+        | Operation::VoxLeave { .. } => execute_vox_main(id, &active.state),
+        Operation::VoxStatus => vox::status().map(Some),
+        Operation::VoxAudioStart { mode } => vox::start_audio(mode).map(Some),
+        Operation::VoxAudioPush { audio } => vox::push_audio(audio).map(Some),
+        Operation::VoxAudioStop => vox::stop_audio().map(Some),
     };
     (id, result)
 }
@@ -170,6 +227,96 @@ impl TryFrom<Request> for Operation {
                     profile_image_url,
                 })
             }
+            "vox-start-call" => {
+                let room = request
+                    .room
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive room is required".to_string())?;
+                let caller = request
+                    .caller
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive caller is required".to_string())?;
+                let peers = request
+                    .peers
+                    .filter(|values| !values.is_empty() && values.iter().all(|value| *value > 0))
+                    .ok_or_else(|| "positive peers are required".to_string())?;
+                if peers.contains(&caller) {
+                    return Err("caller must not be included in peers".to_string());
+                }
+                Ok(Self::VoxStartCall {
+                    room,
+                    caller,
+                    group_chat: request.group_chat.unwrap_or(peers.len() > 1),
+                    peers,
+                    open_chat: request.open_chat.unwrap_or(false),
+                    team_chat: request.team_chat.unwrap_or(false),
+                })
+            }
+            "vox-create-room" => {
+                let room = request
+                    .room
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive room is required".to_string())?;
+                let title = request.title.unwrap_or_default();
+                if title.chars().count() > 100 {
+                    return Err("voice room title is too long".to_string());
+                }
+                Ok(Self::VoxCreateRoom { room, title })
+            }
+            "vox-join-room" => {
+                let room = request
+                    .room
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive room is required".to_string())?;
+                let call = request
+                    .call
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive call is required".to_string())?;
+                let host_v4 = request.host_v4.unwrap_or_default();
+                let host_v6 = request.host_v6.unwrap_or_default();
+                if host_v4.is_empty() && host_v6.is_empty() {
+                    return Err("a VOX host is required".to_string());
+                }
+                if host_v4.len() > 255 || host_v6.len() > 255 {
+                    return Err("VOX host is too long".to_string());
+                }
+                let port = request
+                    .port
+                    .filter(|value| (1..=65_535).contains(value))
+                    .ok_or_else(|| "valid VOX port is required".to_string())?;
+                Ok(Self::VoxJoinRoom {
+                    room,
+                    call,
+                    host_v4,
+                    host_v6,
+                    port,
+                })
+            }
+            "vox-leave" => {
+                let kind = request.kind.unwrap_or_default();
+                if !matches!(kind.as_str(), "cecall" | "voiceroom") {
+                    return Err("kind must be cecall or voiceroom".to_string());
+                }
+                let room = request
+                    .room
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "positive room is required".to_string())?;
+                Ok(Self::VoxLeave { kind, room })
+            }
+            "vox-status" => Ok(Self::VoxStatus),
+            "vox-audio-start" => {
+                let mode = request.mode.unwrap_or_else(|| "replace".to_string());
+                if !matches!(mode.as_str(), "replace" | "mix") {
+                    return Err("VOX audio mode must be replace or mix".to_string());
+                }
+                Ok(Self::VoxAudioStart { mode })
+            }
+            "vox-audio-push" => request
+                .audio
+                .filter(|value| !value.is_empty())
+                .map(|audio| Self::VoxAudioPush { audio })
+                .ok_or_else(|| "audio is required".to_string()),
+            "vox-audio-stop" => Ok(Self::VoxAudioStop),
             _ => Err("unsupported action".to_string()),
         }
     }
@@ -274,6 +421,11 @@ fn execute_join_open_chat(state: &CommandState) -> CommandResult {
     serde_json::to_string(&result)
         .map(Some)
         .map_err(|error| format!("serialize open chat join result: {error}"))
+}
+
+fn execute_vox_main(id: u64, state: &CommandState) -> CommandResult {
+    with_env(|env| unsafe { post_main(env, id, ACTION_VOX) })?;
+    wait_result(state, Duration::from_secs(35))
 }
 
 fn wait_loaded(state: &CommandState, timeout: Duration) -> Result<(), String> {
@@ -393,6 +545,27 @@ mod tests {
                 ..
             }
         ));
+
+        let vox = Operation::try_from(request(serde_json::json!({
+            "token": "secret",
+            "id": 3,
+            "action": "vox-start-call",
+            "room": 10,
+            "caller": 20,
+            "peers": [30, 40],
+            "openChat": true
+        })))
+        .unwrap();
+        assert!(matches!(
+            vox,
+            Operation::VoxStartCall {
+                room: 10,
+                caller: 20,
+                group_chat: true,
+                open_chat: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -419,6 +592,21 @@ mod tests {
             "nickname": "noa"
         })));
         assert_eq!(invalid_url.err().as_deref(), Some("invalid open chat URL"));
+
+        let invalid_vox_host = Operation::try_from(request(serde_json::json!({
+            "token": "secret",
+            "id": 5,
+            "action": "vox-join-room",
+            "room": 10,
+            "call": 20,
+            "hostV4": "",
+            "hostV6": "",
+            "port": 17000
+        })));
+        assert_eq!(
+            invalid_vox_host.err().as_deref(),
+            Some("a VOX host is required")
+        );
     }
 
     #[test]

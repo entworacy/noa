@@ -10,6 +10,7 @@ import com.android.uiautomator.core.UiSelector;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -18,14 +19,11 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.lang.reflect.Method;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Base64;
 import java.util.List;
-import java.util.Locale;
-import java.util.regex.Pattern;
 import android.content.ClipData;
 import android.app.UiAutomation;
 import android.graphics.Rect;
@@ -34,7 +32,8 @@ import android.view.accessibility.AccessibilityWindowInfo;
 
 public final class UiAgent extends UiAutomatorTestCase {
     private static final int PORT = 47123;
-    private static final String DUMP_PATH = "/data/local/tmp/noa-accessibility.xml";
+    private static final String DUMP_FILE = "noa-accessibility.xml";
+    private static final File DUMP_PATH = new File("/data/local/tmp", DUMP_FILE);
     private static final String MEMBER_LIST_ID = "com.kakao.talk:id/recycler_view";
     private static final String PROFILE_NAME_ID = "com.kakao.talk.openlink:id/name";
     private static final String CHAT_TITLE_ID =
@@ -47,8 +46,6 @@ public final class UiAgent extends UiAutomatorTestCase {
     private static final String OPEN_CHAT_PROFILE_NAME_PATTERN =
         "com\\.kakao\\.talk\\.openlink:id/profile_name(?:_res_.*)?";
     private static final String SETTING_BUTTON_ID = "com.kakao.talk:id/setting_button";
-    private static final String RESEND_INDICATOR_ID = "com.kakao.talk:id/resend_indicator";
-    private static final String BUBBLE_ID = "com.kakao.talk:id/bubble_linearlayout";
     private static final String[] KICK_LABELS = {
         "대화상대 내보내기", "Send out participant"
     };
@@ -68,8 +65,7 @@ public final class UiAgent extends UiAutomatorTestCase {
     private String clipboardSentinel;
 
     public void testServe() throws Exception {
-        sdkInt = readAndroidSdk();
-        verifyRequiredAndroidApi(sdkInt);
+        sdkInt = UiAgentApi.verify();
         getUiDevice();
         Configurator.getInstance()
             .setWaitForIdleTimeout(100)
@@ -98,7 +94,7 @@ public final class UiAgent extends UiAutomatorTestCase {
         );
         String command = reader.readLine();
         if ("PING".equals(command)) {
-            respond(writer, "NOA_UI_32");
+            respond(writer, "NOA_UI_37");
             return;
         }
         if ("API_STATUS".equals(command)) {
@@ -232,7 +228,7 @@ public final class UiAgent extends UiAutomatorTestCase {
                 for (int index = 2; index < parts.length; index++) {
                     targets[index - 2] = decode(parts[index]);
                 }
-                respond(writer, waitClickResendTarget(targets, timeout));
+                respond(writer, UiResend.waitClickTarget(getUiDevice(), targets, timeout));
             } catch (Throwable error) {
                 respond(writer, "ERR " + singleLine(error.toString()));
             }
@@ -408,8 +404,15 @@ public final class UiAgent extends UiAutomatorTestCase {
         }
         if ("DUMP".equals(command)) {
             try {
+                if (DUMP_PATH.exists() && !DUMP_PATH.delete()) {
+                    throw new IOException("stale accessibility dump could not be removed");
+                }
                 getUiDevice().setCompressedLayoutHeirarchy(true);
-                getUiDevice().dumpWindowHierarchy(DUMP_PATH);
+                // Legacy UiDevice resolves this filename below /data/local/tmp itself.
+                getUiDevice().dumpWindowHierarchy(DUMP_FILE);
+                if (!DUMP_PATH.isFile() || DUMP_PATH.length() == 0) {
+                    throw new IOException("accessibility dump was not created");
+                }
                 respond(writer, "OK");
             } catch (Throwable error) {
                 respond(writer, "ERR " + singleLine(error.toString()));
@@ -1248,179 +1251,6 @@ public final class UiAgent extends UiAutomatorTestCase {
         return false;
     }
 
-    private String waitClickResendTarget(String[] targets, long timeoutMs) throws Exception {
-        long deadline = System.nanoTime() + timeoutMs * 1000000L;
-        String lastResult = "NOT_FOUND";
-        while (true) {
-            ResendCandidate candidate = bestResendCandidate(targets);
-            if (candidate != null) {
-                if (!clickObject(candidate.indicator)) {
-                    throw new IllegalStateException("resend indicator click rejected");
-                }
-                return "OK";
-            }
-            if (targets.length == 0 && visibleObjects(RESEND_INDICATOR_ID).size() > 1) {
-                lastResult = "AMBIGUOUS";
-            }
-            if (System.nanoTime() >= deadline) {
-                return lastResult;
-            }
-            Thread.sleep(25);
-        }
-    }
-
-    private ResendCandidate bestResendCandidate(String[] targets) throws Exception {
-        List<UiObject> indicators = visibleObjects(RESEND_INDICATOR_ID);
-        if (indicators.isEmpty()) {
-            return null;
-        }
-        if (targets.length == 0 && indicators.size() != 1) {
-            return null;
-        }
-        List<Rect> bubbles = visibleBounds(BUBBLE_ID);
-        ResendCandidate best = null;
-        for (UiObject indicator : indicators) {
-            Rect indicatorBounds = indicator.getBounds();
-            Rect bubble = smallestContainer(bubbles, indicatorBounds);
-            if (bubble == null) {
-                continue;
-            }
-            int score = targets.length == 0 ? 1 : scoreBubble(bubble, targets);
-            if (score == 0) {
-                continue;
-            }
-            if (best == null || score > best.score
-                    || (score == best.score && indicatorBounds.bottom > best.bounds.bottom)) {
-                best = new ResendCandidate(indicator, indicatorBounds, score);
-            }
-        }
-        return best;
-    }
-
-    private int scoreBubble(Rect bubble, String[] targets) throws Exception {
-        int score = 0;
-        for (String target : targets) {
-            if (target.isEmpty()) {
-                continue;
-            }
-            String regex = "(?is).*" + Pattern.quote(target) + ".*";
-            score += scoreMatches(
-                new UiSelector().textMatches(regex),
-                bubble,
-                target,
-                false
-            );
-            score += scoreMatches(
-                new UiSelector().descriptionMatches(regex),
-                bubble,
-                target,
-                true
-            );
-        }
-        return score;
-    }
-
-    private int scoreMatches(
-        UiSelector selector,
-        Rect bubble,
-        String target,
-        boolean description
-    ) throws Exception {
-        int score = 0;
-        for (int instance = 0; instance < 100; instance++) {
-            UiObject candidate = new UiObject(selector.instance(instance));
-            if (!candidate.exists()) {
-                break;
-            }
-            if (!contains(bubble, candidate.getBounds())) {
-                continue;
-            }
-            String value = description
-                ? candidate.getContentDescription()
-                : candidate.getText();
-            score += matchScore(value, target);
-        }
-        return score;
-    }
-
-    private List<UiObject> visibleObjects(String resourceId) {
-        List<UiObject> objects = new ArrayList<UiObject>();
-        for (int instance = 0; instance < 100; instance++) {
-            UiObject object = new UiObject(
-                new UiSelector().resourceId(resourceId).instance(instance)
-            );
-            if (!object.exists()) {
-                break;
-            }
-            objects.add(object);
-        }
-        return objects;
-    }
-
-    private List<Rect> visibleBounds(String resourceId) throws Exception {
-        List<Rect> bounds = new ArrayList<Rect>();
-        for (UiObject object : visibleObjects(resourceId)) {
-            bounds.add(object.getBounds());
-        }
-        return bounds;
-    }
-
-    private static Rect smallestContainer(List<Rect> containers, Rect inner) {
-        Rect smallest = null;
-        long smallestArea = Long.MAX_VALUE;
-        for (Rect container : containers) {
-            if (!contains(container, inner)) {
-                continue;
-            }
-            long area = (long) (container.right - container.left)
-                * (container.bottom - container.top);
-            if (area < smallestArea) {
-                smallest = container;
-                smallestArea = area;
-            }
-        }
-        return smallest;
-    }
-
-    private static boolean contains(Rect outer, Rect inner) {
-        return outer.left <= inner.left && outer.top <= inner.top
-            && outer.right >= inner.right && outer.bottom >= inner.bottom;
-    }
-
-    private static int matchScore(String value, String target) {
-        if (value == null) {
-            return 0;
-        }
-        String normalizedValue = value.trim().toLowerCase(Locale.ROOT);
-        String normalizedTarget = target.trim().toLowerCase(Locale.ROOT);
-        if (normalizedValue.isEmpty() || normalizedTarget.isEmpty()) {
-            return 0;
-        }
-        if (normalizedValue.equals(normalizedTarget)) {
-            return 1000 + normalizedTarget.codePointCount(0, normalizedTarget.length());
-        }
-        if (normalizedValue.contains(normalizedTarget)
-                || normalizedTarget.contains(normalizedValue)) {
-            return Math.min(
-                normalizedValue.codePointCount(0, normalizedValue.length()),
-                normalizedTarget.codePointCount(0, normalizedTarget.length())
-            );
-        }
-        return 0;
-    }
-
-    private static final class ResendCandidate {
-        private final UiObject indicator;
-        private final Rect bounds;
-        private final int score;
-
-        private ResendCandidate(UiObject indicator, Rect bounds, int score) {
-            this.indicator = indicator;
-            this.bounds = bounds;
-            this.score = score;
-        }
-    }
-
     private UiObject firstLabel(String[] labels) {
         for (String label : labels) {
             UiObject target = new UiObject(new UiSelector().description(label));
@@ -1453,213 +1283,4 @@ public final class UiAgent extends UiAutomatorTestCase {
         return null;
     }
 
-    private static void verifyRequiredAndroidApi(int sdkInt) throws Exception {
-        if (sdkInt < 26) {
-            throw new IllegalStateException("Android API 26 이상이 필요합니다: " + sdkInt);
-        }
-        requireConstructor(UiSelector.class);
-        requireConstructor(UiObject.class, UiSelector.class);
-        requireConstructor(UiScrollable.class, UiSelector.class);
-        requireMethod(Configurator.class, "getInstance", Configurator.class);
-        requireMethod(
-            Configurator.class,
-            "setWaitForIdleTimeout",
-            Configurator.class,
-            Long.TYPE
-        );
-        requireMethod(
-            Configurator.class,
-            "setWaitForSelectorTimeout",
-            Configurator.class,
-            Long.TYPE
-        );
-        requireMethod(
-            Configurator.class,
-            "setActionAcknowledgmentTimeout",
-            Configurator.class,
-            Long.TYPE
-        );
-        requireMethod(
-            Configurator.class,
-            "setScrollAcknowledgmentTimeout",
-            Configurator.class,
-            Long.TYPE
-        );
-
-        requireMethod(UiAutomatorTestCase.class, "getUiDevice", UiDevice.class);
-        Field bridgeField = UiDevice.class.getDeclaredField("mUiAutomationBridge");
-        bridgeField.setAccessible(true);
-        Class<?> bridgeClass = Class.forName(
-            "com.android.uiautomator.core.UiAutomatorBridge"
-        );
-        Field automationField = bridgeClass.getDeclaredField("mUiAutomation");
-        automationField.setAccessible(true);
-        requireMethod(
-            bridgeClass,
-            "getRootInActiveWindow",
-            AccessibilityNodeInfo.class
-        );
-        requireMethod(UiAutomation.class, "getWindows", List.class);
-        requireMethod(
-            UiAutomation.class,
-            "getRootInActiveWindow",
-            AccessibilityNodeInfo.class
-        );
-        requireMethod(AccessibilityWindowInfo.class, "isActive", Boolean.TYPE);
-        requireMethod(AccessibilityWindowInfo.class, "isFocused", Boolean.TYPE);
-        requireMethod(
-            AccessibilityWindowInfo.class,
-            "getRoot",
-            AccessibilityNodeInfo.class
-        );
-        requireMethod(AccessibilityWindowInfo.class, "recycle", Void.TYPE);
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "findAccessibilityNodeInfosByViewId",
-            List.class,
-            String.class
-        );
-        requireMethod(AccessibilityNodeInfo.class, "getText", CharSequence.class);
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "getContentDescription",
-            CharSequence.class
-        );
-        requireMethod(AccessibilityNodeInfo.class, "getChildCount", Integer.TYPE);
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "getChild",
-            AccessibilityNodeInfo.class,
-            Integer.TYPE
-        );
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "getParent",
-            AccessibilityNodeInfo.class
-        );
-        requireMethod(AccessibilityNodeInfo.class, "isClickable", Boolean.TYPE);
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "performAction",
-            Boolean.TYPE,
-            Integer.TYPE
-        );
-        requireMethod(
-            AccessibilityNodeInfo.class,
-            "getBoundsInScreen",
-            Void.TYPE,
-            Rect.class
-        );
-        requireMethod(AccessibilityNodeInfo.class, "recycle", Void.TYPE);
-        requireMethod(ClipData.class, "getItemCount", Integer.TYPE);
-        requireMethod(ClipData.class, "getItemAt", ClipData.Item.class, Integer.TYPE);
-        requireMethod(ClipData.Item.class, "getText", CharSequence.class);
-
-        Class<?> binder = Class.forName("android.os.IBinder");
-        Class<?> serviceManager = Class.forName("android.os.ServiceManager");
-        Class<?> clipboard = Class.forName("android.content.IClipboard");
-        Class<?> clipboardStub = Class.forName("android.content.IClipboard$Stub");
-        requireMethod(serviceManager, "getService", binder, String.class);
-        requireMethod(clipboardStub, "asInterface", clipboard, binder);
-        requireMethod(
-            clipboard,
-            "clearPrimaryClip",
-            Void.TYPE,
-            String.class,
-            String.class,
-            Integer.TYPE,
-            Integer.TYPE
-        );
-        requireMethod(
-            clipboard,
-            "getPrimaryClip",
-            ClipData.class,
-            String.class,
-            String.class,
-            Integer.TYPE,
-            Integer.TYPE
-        );
-        requireMethod(
-            Class.forName("android.os.UserHandle"),
-            "myUserId",
-            Integer.TYPE
-        );
-        requireMethod(UiSelector.class, "description", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "descriptionMatches", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "text", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "textMatches", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "resourceId", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "resourceIdMatches", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "className", UiSelector.class, String.class);
-        requireMethod(UiSelector.class, "scrollable", UiSelector.class, Boolean.TYPE);
-        requireMethod(UiSelector.class, "instance", UiSelector.class, Integer.TYPE);
-
-        requireMethod(UiObject.class, "exists", Boolean.TYPE);
-        requireMethod(UiObject.class, "click", Boolean.TYPE);
-        requireMethod(UiObject.class, "getBounds", Rect.class);
-        requireMethod(UiObject.class, "getText", String.class);
-        requireMethod(UiObject.class, "getContentDescription", String.class);
-
-        requireMethod(UiScrollable.class, "setAsVerticalList", UiScrollable.class);
-        requireMethod(
-            UiScrollable.class,
-            "scrollToBeginning",
-            Boolean.TYPE,
-            Integer.TYPE,
-            Integer.TYPE
-        );
-        requireMethod(
-            UiScrollable.class,
-            "scrollForward",
-            Boolean.TYPE,
-            Integer.TYPE
-        );
-
-        requireMethod(UiDevice.class, "click", Boolean.TYPE, Integer.TYPE, Integer.TYPE);
-        requireMethod(
-            UiDevice.class,
-            "swipe",
-            Boolean.TYPE,
-            Integer.TYPE,
-            Integer.TYPE,
-            Integer.TYPE,
-            Integer.TYPE,
-            Integer.TYPE
-        );
-        requireMethod(UiDevice.class, "waitForIdle", Void.TYPE, Long.TYPE);
-        requireMethod(
-            UiDevice.class,
-            "setCompressedLayoutHeirarchy",
-            Void.TYPE,
-            Boolean.TYPE
-        );
-        requireMethod(UiDevice.class, "dumpWindowHierarchy", Void.TYPE, String.class);
-    }
-
-    private static int readAndroidSdk() throws Exception {
-        return Class.forName("android.os.Build$VERSION")
-            .getField("SDK_INT")
-            .getInt(null);
-    }
-
-    private static void requireConstructor(Class<?> owner, Class<?>... parameters)
-            throws Exception {
-        owner.getConstructor(parameters);
-    }
-
-    private static void requireMethod(
-        Class<?> owner,
-        String name,
-        Class<?> returnType,
-        Class<?>... parameters
-    ) throws Exception {
-        Method method = owner.getMethod(name, parameters);
-        if (!method.getReturnType().equals(returnType)) {
-            throw new NoSuchMethodException(
-                owner.getName() + "." + name + " return type: expected "
-                    + returnType.getName() + ", actual "
-                    + method.getReturnType().getName()
-            );
-        }
-    }
 }

@@ -561,6 +561,66 @@ impl RoomCatalog {
         self.map_room(&connection, raw)
     }
 
+    /// Resolves the current open-chat voice-room endpoint from KakaoTalk's own
+    /// chat log. The HTTP client never supplies VOX server coordinates.
+    pub fn voiceroom_join_info(&self, chat_id: i64) -> Result<VoiceroomJoinInfo, NoaError> {
+        let connection = self.lock()?;
+        if !table_exists(&connection, "db1", "chat_logs") {
+            return Err(NoaError::Database(
+                "KakaoTalk chat_logs 테이블이 없습니다".to_string(),
+            ));
+        }
+        let columns = table_columns(&connection, "db1", "chat_logs")?;
+        for required in ["_id", "type", "chat_id", "attachment"] {
+            if !columns.contains(required) {
+                return Err(NoaError::Database(format!(
+                    "KakaoTalk chat_logs.{required} 열이 없습니다"
+                )));
+            }
+        }
+
+        let mut statement = connection
+            .prepare(
+                "SELECT type, attachment
+                 FROM db1.chat_logs
+                 WHERE chat_id = ?1
+                 ORDER BY _id DESC
+                 LIMIT 100",
+            )
+            .map_err(|error| {
+                NoaError::Database(format!("보이스룸 접속정보 조회 준비 실패: {error}"))
+            })?;
+        let rows = statement
+            .query_map([chat_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                ))
+            })
+            .map_err(|error| NoaError::Database(format!("보이스룸 접속정보 조회 실패: {error}")))?;
+
+        for row in rows {
+            let (message_type, attachment) = row.map_err(|error| {
+                NoaError::Database(format!("보이스룸 접속정보 행 해석 실패: {error}"))
+            })?;
+            if normalized_chat_message_type(message_type) != 52 {
+                continue;
+            }
+            match parse_voiceroom_attachment(chat_id, &attachment)? {
+                VoiceroomAttachment::Invite(info) => return Ok(info),
+                VoiceroomAttachment::Ended => {
+                    return Err(NoaError::NotFound(format!(
+                        "진행 중인 오픈채팅 보이스톡이 없습니다: {chat_id}"
+                    )));
+                }
+                VoiceroomAttachment::Other => {}
+            }
+        }
+        Err(NoaError::NotFound(format!(
+            "진행 중인 오픈채팅 보이스톡을 찾을 수 없습니다: {chat_id}"
+        )))
+    }
+
     /// Reads the authoritative active-member list for one room without rebuilding the
     /// complete room catalog. This is intentionally stricter than `snapshot`: an
     /// unreadable member list must not be mistaken for a successful removal.
@@ -859,6 +919,16 @@ pub struct QueuedMessage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VoiceroomJoinInfo {
+    pub chat_id: i64,
+    pub call_id: i64,
+    pub host_v4: String,
+    pub host_v6: String,
+    pub port: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OwnedProfile {
     pub profile_id: String,
     pub nickname: String,
@@ -896,6 +966,81 @@ struct RawFeed {
     message: String,
     metadata: Option<String>,
     created_at: Option<i64>,
+}
+
+enum VoiceroomAttachment {
+    Invite(VoiceroomJoinInfo),
+    Ended,
+    Other,
+}
+
+fn normalized_chat_message_type(value: i64) -> i64 {
+    value & !16_384_i64 & !268_435_456_i64
+}
+
+fn parse_voiceroom_attachment(
+    chat_id: i64,
+    attachment: &str,
+) -> Result<VoiceroomAttachment, NoaError> {
+    let Ok(value) = serde_json::from_str::<Value>(attachment) else {
+        return Ok(VoiceroomAttachment::Other);
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("vr_bye") => Ok(VoiceroomAttachment::Ended),
+        Some("vr_invite") => {
+            let call_id = optional_json_i64(value.get("callId"))
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    NoaError::Database("보이스룸 초대에 올바른 callId가 없습니다".to_string())
+                })?;
+            let host_v4 = value
+                .get("csIP")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let host_v6 = value
+                .get("csIP6")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if (host_v4.is_empty() && host_v6.is_empty())
+                || !valid_vox_host(&host_v4)
+                || !valid_vox_host(&host_v6)
+            {
+                return Err(NoaError::Database(
+                    "보이스룸 초대의 VOX 호스트가 올바르지 않습니다".to_string(),
+                ));
+            }
+            let port = optional_json_i64(value.get("csPort"))
+                .and_then(|value| i32::try_from(value).ok())
+                .filter(|value| (1..=65_535).contains(value))
+                .ok_or_else(|| {
+                    NoaError::Database("보이스룸 초대의 VOX 포트가 올바르지 않습니다".to_string())
+                })?;
+            Ok(VoiceroomAttachment::Invite(VoiceroomJoinInfo {
+                chat_id,
+                call_id,
+                host_v4,
+                host_v6,
+                port,
+            }))
+        }
+        _ => Ok(VoiceroomAttachment::Other),
+    }
+}
+
+fn optional_json_i64(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_str()?.parse::<i64>().ok())
+    })
+}
+
+fn valid_vox_host(value: &str) -> bool {
+    value.len() <= 255 && !value.chars().any(char::is_control)
 }
 
 fn attach(
@@ -1129,6 +1274,10 @@ mod tests {
                   (1, 1, 0, 900, 100,
                    '{"feedType":1,"members":[{"userId":200,"nickName":"길동"}]}',
                   '{}', '{"enc":0,"isMine":true}', 1000, NULL);
+                INSERT INTO chat_logs VALUES
+                  (2, 2, 52, 900, 200, '',
+                   '{"type":"vr_invite","callId":"345","csIP":"203.0.113.5","csIP6":"2001:db8::5","csPort":17000}',
+                   '{}', 1001, NULL);
                 "#,
                 )
                 .unwrap();
@@ -1216,6 +1365,16 @@ mod tests {
         );
         assert_eq!(catalog.room_snapshot(900).unwrap().member_count, 2);
         assert!(catalog.room_has_member(900, 200).unwrap());
+        assert_eq!(
+            catalog.voiceroom_join_info(900).unwrap(),
+            VoiceroomJoinInfo {
+                chat_id: 900,
+                call_id: 345,
+                host_v4: "203.0.113.5".to_string(),
+                host_v6: "2001:db8::5".to_string(),
+                port: 17_000,
+            }
+        );
         {
             let primary = Connection::open(databases.join("KakaoTalk.db")).unwrap();
             primary
@@ -1224,9 +1383,21 @@ mod tests {
                     [],
                 )
                 .unwrap();
+            primary
+                .execute(
+                    "INSERT INTO chat_logs
+                     (_id, id, type, chat_id, user_id, message, attachment, v, created_at)
+                     VALUES (3, 3, 268435508, 900, 200, '', '{\"type\":\"vr_bye\"}', '{}', 1002)",
+                    [],
+                )
+                .unwrap();
         }
         assert!(!catalog.room_has_member(900, 200).unwrap());
         assert_eq!(catalog.room_snapshot(900).unwrap().member_count, 1);
+        assert!(matches!(
+            catalog.voiceroom_join_info(900),
+            Err(NoaError::NotFound(_))
+        ));
         let profiles = catalog.owned_profiles().unwrap();
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0].profile_id, "main-profile");

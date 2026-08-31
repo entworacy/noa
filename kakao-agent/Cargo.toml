@@ -8,6 +8,7 @@ build = "build.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+base64 = "0.22"
 jni = "0.22"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
