@@ -42,7 +42,7 @@ Actix worker는 HTTP 파싱과 응답을 담당합니다. SQLite처럼 블로킹
 
 공개 Noa API는 `NOA_API_TOKEN`이 설정되었을 때 Bearer, `X-Noa-Token`, query token을 확인합니다. `/health`와 HTML 대시보드는 인증하지 않습니다. query token은 접근 로그와 브라우저 기록에 남을 수 있어 운영 환경에서는 헤더를 사용해야 합니다.
 
-Iris 내부 브리지는 공개 토큰과 분리된 `NOA_IRIS_HOOK_TOKEN` 및 `X-Noa-Hook-Token`을 사용합니다. `/internal/iris/reply`와 `/internal/iris/endpoint`는 Iris 에이전트 전용이며 외부 클라이언트가 직접 호출하는 계약이 아닙니다.
+Iris 내부 브리지는 공개 토큰과 분리된 `NOA_IRIS_HOOK_TOKEN` 및 `X-Noa-Hook-Token`을 사용합니다. `/internal/iris/reply`와 `/internal/iris/endpoint`는 Iris 에이전트 전용이며 외부 클라이언트가 직접 호출하는 계약이 아닙니다. Endpoint 요청 본문은 Ktor에서 raw byte로 수신하고 내부 TCP 구간에서 Base64로 운반해 VOX PCM을 포함한 바이너리를 보존합니다.
 
 ## 전체 환경변수
 

@@ -517,8 +517,18 @@ Custom:
 | `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
 | `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
 | `POST` | `/noa/rooms/{chatId}/leave` | `POST /api/rooms/{chatId}/leave` |
+| `GET` | `/noa/vox/status` | `GET /api/vox/status` |
+| `POST` | `/noa/vox/voice-talk` | `POST /api/vox/voice-talk` |
+| `POST` | `/noa/vox/voice-rooms` | `POST /api/vox/voice-rooms` |
+| `POST` | `/noa/vox/voice-rooms/join` | `POST /api/vox/voice-rooms/join` |
+| `POST` | `/noa/vox/leave` | `POST /api/vox/leave` |
+| `POST` | `/noa/vox/audio/start` | `POST /api/vox/audio/start` |
+| `POST` | `/noa/vox/audio` | `POST /api/vox/audio` |
+| `POST` | `/noa/vox/audio/stream` | `POST /api/vox/audio/stream` |
+| `POST` | `/noa/vox/audio/stop` | `POST /api/vox/audio/stop` |
 
 본문은 대응하는 Noa API와 동일하며 Iris가 내부 인증을 추가합니다.
+PCM 본문도 `application/octet-stream` 그대로 전송하며 Base64 변환은 내부 브리지에서만 수행합니다. Iris의 Ktor gateway는 요청 본문을 전달 전에 메모리에 모으므로 장시간 실시간 입력은 `/noa/vox/audio`에 작은 PCM 청크를 순차 전송하거나 Noa의 `/api/vox/audio/stream`을 직접 사용하십시오.
 
 ## 주요 환경변수
 

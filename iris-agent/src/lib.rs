@@ -12,9 +12,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use jni::sys::{
-    JNI_EDETACHED, JNI_OK, JNI_VERSION_1_6, JNIEnv, JNINativeMethod, JavaVM, jclass, jint, jlong,
-    jobject, jobjectArray, jstring, jvalue,
+    JNI_EDETACHED, JNI_OK, JNI_VERSION_1_6, JNIEnv, JNINativeMethod, JavaVM, jbyteArray, jclass,
+    jint, jlong, jobject, jobjectArray, jstring, jvalue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -106,6 +107,8 @@ struct BridgeRequest<'a> {
     uri: Option<&'a str>,
     #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
     content_type: Option<&'a str>,
+    #[serde(rename = "bodyEncoding", skip_serializing_if = "Option::is_none")]
+    body_encoding: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body: Option<&'a str>,
 }
@@ -310,13 +313,13 @@ unsafe extern "system" fn bridge_endpoint(
     method: jstring,
     uri: jstring,
     content_type: jstring,
-    body: jstring,
+    body: jbyteArray,
 ) -> jobject {
     let result = (|| {
         let method = unsafe { java_string(env, method)? };
         let uri = unsafe { java_string(env, uri)? };
         let content_type = unsafe { java_string(env, content_type)? };
-        let body = unsafe { java_string(env, body)? };
+        let body = unsafe { java_byte_array(env, body)? };
         let response = forward_endpoint(&method, &uri, &content_type, &body)?;
         unsafe { new_endpoint_response(env, response) }
     })();
@@ -516,6 +519,7 @@ fn notify_ready() -> Result<(), String> {
         method: None,
         uri: None,
         content_type: None,
+        body_encoding: None,
         body: None,
     };
     bridge_transaction(policy.address, &request).map(|_| ())
@@ -534,6 +538,7 @@ fn forward_reply(id: u64, reply: &PendingReply) -> Result<(), String> {
         method: None,
         uri: None,
         content_type: None,
+        body_encoding: None,
         body: None,
     };
     let response = bridge_transaction(policy.address, &request)?;
@@ -552,9 +557,10 @@ fn forward_endpoint(
     method: &str,
     uri: &str,
     content_type: &str,
-    body: &str,
+    body: &[u8],
 ) -> Result<EndpointResponse, String> {
     let policy = policy()?;
+    let encoded = STANDARD.encode(body);
     let request = BridgeRequest {
         event: "endpoint",
         token: &policy.token,
@@ -566,9 +572,19 @@ fn forward_endpoint(
         method: Some(method),
         uri: Some(uri),
         content_type: Some(content_type),
-        body: Some(body),
+        body_encoding: Some("base64"),
+        body: Some(&encoded),
     };
-    let response = bridge_transaction(policy.address, &request)?;
+    let read_timeout = if uri
+        .split('?')
+        .next()
+        .is_some_and(|path| path.ends_with("/vox/audio/stream"))
+    {
+        Duration::from_secs(6 * 60 * 60)
+    } else {
+        Duration::from_secs(125)
+    };
+    let response = bridge_transaction_with_timeout(policy.address, &request, read_timeout)?;
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(response
             .get("error")
@@ -599,10 +615,18 @@ fn forward_endpoint(
 }
 
 fn bridge_transaction<T: Serialize>(address: SocketAddr, request: &T) -> Result<Value, String> {
+    bridge_transaction_with_timeout(address, request, Duration::from_secs(125))
+}
+
+fn bridge_transaction_with_timeout<T: Serialize>(
+    address: SocketAddr,
+    request: &T,
+    read_timeout: Duration,
+) -> Result<Value, String> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(125)))
+        .set_read_timeout(Some(read_timeout))
         .map_err(|error| error.to_string())?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -734,7 +758,7 @@ unsafe fn register_bridge(env: *mut JNIEnv, loader: jobject) -> Result<(), Strin
         ),
         native_method(
             "endpoint",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ldev/noa/iris/EndpointResponse;",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)Ldev/noa/iris/EndpointResponse;",
             bridge_endpoint as *mut c_void,
         ),
     ];
@@ -1201,6 +1225,28 @@ unsafe fn new_string(env: *mut JNIEnv, value: &str) -> Result<jobject, String> {
     } else {
         Ok(string.cast())
     }
+}
+
+unsafe fn java_byte_array(env: *mut JNIEnv, value: jbyteArray) -> Result<Vec<u8>, String> {
+    if value.is_null() {
+        return Err("Java byte array is null".to_string());
+    }
+    let length = unsafe { ((**env).v1_4.GetArrayLength)(env, value) };
+    unsafe { check(env, "read Java byte array length")? };
+    let mut bytes = vec![0_u8; length as usize];
+    if length > 0 {
+        unsafe {
+            ((**env).v1_4.GetByteArrayRegion)(
+                env,
+                value,
+                0,
+                length,
+                bytes.as_mut_ptr().cast(),
+            )
+        };
+        unsafe { check(env, "read Java byte array")? };
+    }
+    Ok(bytes)
 }
 
 unsafe fn java_string(env: *mut JNIEnv, value: jstring) -> Result<String, String> {

@@ -1993,6 +1993,107 @@ mod tests {
                 .iter()
                 .any(|value| value == "POST /open-chat/profiles/share-member")
         );
+        for endpoint in [
+            "GET /vox/status",
+            "POST /vox/voice-talk",
+            "POST /vox/voice-rooms",
+            "POST /vox/voice-rooms/join",
+            "POST /vox/leave",
+            "POST /vox/audio/start",
+            "POST /vox/audio",
+            "POST /vox/audio/stream",
+            "POST /vox/audio/stop",
+        ] {
+            assert!(
+                endpoint_index["endpoints"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == endpoint),
+                "Iris endpoint index is missing {endpoint}"
+            );
+        }
+
+        let endpoint_vox_status = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/internal/iris/endpoint/vox/status")
+                .insert_header(("X-Noa-Hook-Token", "hook-token"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            endpoint_vox_status.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        let vox_post_cases: [(&str, &str, &[u8], StatusCode); 8] = [
+            (
+                "/internal/iris/endpoint/vox/voice-talk",
+                "application/json",
+                br#"{"chatId":"invalid"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/internal/iris/endpoint/vox/voice-rooms",
+                "application/json",
+                br#"{"chatId":"invalid"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/internal/iris/endpoint/vox/voice-rooms/join",
+                "application/json",
+                br#"{"chatId":"invalid"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/internal/iris/endpoint/vox/leave",
+                "application/json",
+                br#"{"chatId":"invalid","kind":"voiceroom"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/internal/iris/endpoint/vox/audio/start",
+                "application/json",
+                br#"{"mode":"replace"}"#,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/internal/iris/endpoint/vox/audio",
+                "application/octet-stream",
+                &[0, 255],
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/internal/iris/endpoint/vox/audio/stream?mode=replace",
+                "application/octet-stream",
+                &[0, 255],
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/internal/iris/endpoint/vox/audio/stop",
+                "application/octet-stream",
+                &[],
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ];
+        for (uri, content_type, body, expected_status) in vox_post_cases {
+            let response = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri(uri)
+                    .insert_header(("X-Noa-Hook-Token", "hook-token"))
+                    .insert_header((header::CONTENT_TYPE, content_type))
+                    .set_payload(web::Bytes::copy_from_slice(body))
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "unexpected status for {uri}"
+            );
+        }
 
         let endpoint_profiles_without_database = test::call_service(
             &app,

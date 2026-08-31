@@ -19,8 +19,10 @@ public final class EndpointInstaller {
     private static final Object UNIT = staticField("kotlin.Unit", "INSTANCE");
     private static final Object SUSPENDED = invokeStatic(
             method("kotlin.coroutines.intrinsics.IntrinsicsKt", "getCOROUTINE_SUSPENDED", 0));
-    private static final Method RECEIVE_TEXT = method(
-            "io.ktor.server.request.ApplicationReceiveFunctionsKt", "receiveText", 2);
+    private static final Method RECEIVE_CHANNEL = method(
+            "io.ktor.server.request.ApplicationReceiveFunctionsKt", "receiveChannel", 2);
+    private static final Method READ_BYTES = method(
+            "io.ktor.utils.io.ByteReadChannelOperationsKt", "toByteArray", 2);
     private static final Method RESPOND_TEXT = respondTextMethod();
     private static final Method GET_URI = method(
             "io.ktor.server.request.ApplicationRequestPropertiesKt", "getUri", 1);
@@ -119,18 +121,33 @@ public final class EndpointInstaller {
     private static Object handleCall(Object call, Object completion) throws Exception {
         Object waiting = continuation(completion, result -> {
             throwOnFailure(result);
-            finishRequest(call, (String) result, completion, true);
+            receiveBody(call, result, completion, true);
         });
-        Object received = invoke(RECEIVE_TEXT, null, call, waiting);
+        Object received = invoke(RECEIVE_CHANNEL, null, call, waiting);
         if (received == SUSPENDED) {
             return SUSPENDED;
         }
         throwOnFailure(received);
-        return finishRequest(call, (String) received, completion, false);
+        return receiveBody(call, received, completion, false);
+    }
+
+    private static Object receiveBody(
+            Object call, Object channel, Object completion, boolean resumeCompletion)
+            throws Exception {
+        Object waiting = continuation(completion, result -> {
+            throwOnFailure(result);
+            finishRequest(call, (byte[]) result, completion, true);
+        });
+        Object received = invoke(READ_BYTES, null, channel, waiting);
+        if (received == SUSPENDED) {
+            return SUSPENDED;
+        }
+        throwOnFailure(received);
+        return finishRequest(call, (byte[]) received, completion, resumeCompletion);
     }
 
     private static Object finishRequest(
-            Object call, String body, Object completion, boolean resumeCompletion) throws Exception {
+            Object call, byte[] body, Object completion, boolean resumeCompletion) throws Exception {
         try {
             Object request = invoke(findMethod(call.getClass(), "getRequest", 0), call);
             Object httpMethod = invoke(GET_HTTP_METHOD, null, request);

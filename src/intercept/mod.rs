@@ -13,6 +13,8 @@ use crate::{model::LocoPacket, settings::Settings};
 use tokio::sync::broadcast;
 
 #[cfg(any(target_os = "android", test))]
+mod iris;
+#[cfg(any(target_os = "android", test))]
 mod loco;
 #[cfg(target_os = "android")]
 mod runtime;

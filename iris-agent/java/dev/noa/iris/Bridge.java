@@ -8,5 +8,5 @@ public final class Bridge {
     static native Object invoke(int kind, Method backup, Object[] args);
 
     static native EndpointResponse endpoint(
-            String method, String uri, String contentType, String body);
+            String method, String uri, String contentType, byte[] body);
 }

@@ -1295,10 +1295,7 @@ fn handle_iris_connection(
                 .get("contentType")
                 .and_then(Value::as_str)
                 .unwrap_or("application/octet-stream");
-            let body = request
-                .get("body")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let body = super::iris::endpoint_body(&request)?;
             let result = forward_iris_endpoint_http(
                 endpoint_bridge_url,
                 endpoint_prefix,
@@ -1306,7 +1303,7 @@ fn handle_iris_connection(
                 method,
                 uri,
                 content_type,
-                body,
+                &body,
             );
             write_iris_endpoint_response(&mut stream, id, result)?;
         }
@@ -1357,7 +1354,7 @@ fn forward_iris_http(url: &str, token: &str, payload: &str) -> Result<(), String
         token,
         "POST",
         "application/json; charset=utf-8",
-        payload,
+        payload.as_bytes(),
     )?;
     if (200..300).contains(&response.status) {
         Ok(())
@@ -1388,7 +1385,7 @@ fn forward_iris_endpoint_http(
     method: &str,
     uri: &str,
     content_type: &str,
-    body: &str,
+    body: &[u8],
 ) -> Result<BridgeHttpResponse, String> {
     if !matches!(
         method,
@@ -1422,7 +1419,7 @@ fn iris_http_transaction(
     token: &str,
     method: &str,
     content_type: &str,
-    payload: &str,
+    payload: &[u8],
 ) -> Result<BridgeHttpResponse, String> {
     if [token, content_type]
         .into_iter()
@@ -1447,8 +1444,13 @@ fn iris_http_transaction(
         .ok_or_else(|| "Iris 내부 브리지 주소를 찾지 못했습니다".to_string())?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(5))
         .map_err(|error| error.to_string())?;
+    let read_timeout = if parsed.path().ends_with("/vox/audio/stream") {
+        Duration::from_secs(6 * 60 * 60)
+    } else {
+        Duration::from_secs(120)
+    };
     stream
-        .set_read_timeout(Some(Duration::from_secs(120)))
+        .set_read_timeout(Some(read_timeout))
         .map_err(|error| error.to_string())?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -1468,7 +1470,7 @@ fn iris_http_transaction(
     )
     .map_err(|error| error.to_string())?;
     stream
-        .write_all(payload.as_bytes())
+        .write_all(payload)
         .map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())?;
     let mut response = Vec::new();

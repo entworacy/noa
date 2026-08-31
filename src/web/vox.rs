@@ -17,21 +17,21 @@ pub(super) fn configure(config: &mut web::ServiceConfig) {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VoiceTalkRequest {
+pub(super) struct VoiceTalkRequest {
     chat_id: String,
     peer_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VoiceRoomRequest {
+pub(super) struct VoiceRoomRequest {
     chat_id: String,
     title: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct JoinVoiceRoomRequest {
+pub(super) struct JoinVoiceRoomRequest {
     chat_id: String,
 }
 
@@ -53,15 +53,19 @@ impl VoxKind {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LeaveRequest {
+pub(super) struct LeaveRequest {
     chat_id: String,
     kind: VoxKind,
 }
 
 async fn status(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
-    Ok(web::Json(crate::intercept::vox_status().await?))
+    Ok(web::Json(status_action(&state).await?))
+}
+
+pub(super) async fn status_action(state: &AppState) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
+    crate::intercept::vox_status().await
 }
 
 async fn start_voice_talk(
@@ -70,10 +74,18 @@ async fn start_voice_talk(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
-    let body = body.into_inner();
+    Ok(web::Json(
+        start_voice_talk_action(body.into_inner(), &state).await?,
+    ))
+}
+
+pub(super) async fn start_voice_talk_action(
+    body: VoiceTalkRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     let chat_id = parse_positive_id("chatId", &body.chat_id)?;
-    let catalog = catalog(&state)?;
+    let catalog = catalog(state)?;
     let room = room_snapshot(catalog.clone(), chat_id).await?;
     if !matches!(
         room.room_type.as_str(),
@@ -102,13 +114,13 @@ async fn start_voice_talk(
         group_chat,
     )
     .await?;
-    Ok(web::Json(serde_json::json!({
+    Ok(serde_json::json!({
         "ok": true,
         "chatId": chat_id.to_string(),
         "peerIds": peer_ids.into_iter().map(|id| id.to_string()).collect::<Vec<_>>(),
         "openChat": open_chat,
         "groupChat": group_chat
-    })))
+    }))
 }
 
 async fn create_voice_room(
@@ -117,10 +129,18 @@ async fn create_voice_room(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
-    let body = body.into_inner();
+    Ok(web::Json(
+        create_voice_room_action(body.into_inner(), &state).await?,
+    ))
+}
+
+pub(super) async fn create_voice_room_action(
+    body: VoiceRoomRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     let chat_id = parse_positive_id("chatId", &body.chat_id)?;
-    let room = room_snapshot(catalog(&state)?, chat_id).await?;
+    let room = room_snapshot(catalog(state)?, chat_id).await?;
     require_open_multi(&room)?;
     let title = body
         .title
@@ -133,11 +153,11 @@ async fn create_voice_room(
         ));
     }
     crate::intercept::vox_create_room(chat_id, title.clone()).await?;
-    Ok(web::Json(serde_json::json!({
+    Ok(serde_json::json!({
         "ok": true,
         "chatId": chat_id.to_string(),
         "title": title
-    })))
+    }))
 }
 
 async fn join_voice_room(
@@ -146,9 +166,18 @@ async fn join_voice_room(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
+    Ok(web::Json(
+        join_voice_room_action(body.into_inner(), &state).await?,
+    ))
+}
+
+pub(super) async fn join_voice_room_action(
+    body: JoinVoiceRoomRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     let chat_id = parse_positive_id("chatId", &body.chat_id)?;
-    let catalog = catalog(&state)?;
+    let catalog = catalog(state)?;
     let room = room_snapshot(catalog.clone(), chat_id).await?;
     require_open_multi(&room)?;
     let info_catalog = catalog.clone();
@@ -165,11 +194,11 @@ async fn join_voice_room(
         info.port,
     )
     .await?;
-    Ok(web::Json(serde_json::json!({
+    Ok(serde_json::json!({
         "ok": true,
         "chatId": chat_id.to_string(),
         "callId": info.call_id.to_string()
-    })))
+    }))
 }
 
 async fn leave(
@@ -178,15 +207,22 @@ async fn leave(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
+    Ok(web::Json(leave_action(body.into_inner(), &state).await?))
+}
+
+pub(super) async fn leave_action(
+    body: LeaveRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     let chat_id = parse_positive_id("chatId", &body.chat_id)?;
-    room_snapshot(catalog(&state)?, chat_id).await?;
+    room_snapshot(catalog(state)?, chat_id).await?;
     crate::intercept::vox_leave(chat_id, body.kind.as_str().to_string()).await?;
-    Ok(web::Json(serde_json::json!({
+    Ok(serde_json::json!({
         "ok": true,
         "chatId": chat_id.to_string(),
         "kind": body.kind.as_str()
-    })))
+    }))
 }
 
 fn resolve_peer_ids(

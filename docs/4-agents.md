@@ -44,6 +44,8 @@ hook callback은 JNI 객체에서 header와 body를 추출해 구조화된 JSON 
 
 Noa는 최근 packet을 제한된 메모리 deque에 저장하고 `/api/loco`와 `/loco`에서 제공합니다. 이 기능은 진단용이며 완전한 패킷 보존이나 감사 로그를 보장하지 않습니다.
 
+Iris agent의 `/noa` gateway는 VOX 제어와 PCM endpoint도 노출합니다. Ktor에서 요청 본문을 raw byte로 읽고 네이티브 제어 채널에서는 Base64로 감싸므로 PCM의 임의 바이트가 UTF-8 변환으로 손상되지 않습니다. HTTP 호출자는 Base64를 직접 처리하지 않습니다.
+
 ## VOX 제어와 오디오 송출
 
 VOX 기능은 base의 `VoxModuleFacade` 계약, `vox_main` manager, `com.kakao.vox` SDK, WebRTC 순으로 내려가는 경계를 사용합니다. Java 어댑터는 Kakao 객체·callback과 UI 전환을 담당하고, Rust 에이전트는 명령 수명과 bounded PCM queue, JNI buffer 처리를 담당합니다. HTTP 검증과 KakaoTalk DB 조회는 호스트 Rust 서비스에만 둬 한 파일이나 한 언어에 역할이 몰리지 않게 분리합니다.

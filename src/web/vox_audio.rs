@@ -44,13 +44,13 @@ impl AudioMode {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AudioStartRequest {
+pub(super) struct AudioStartRequest {
     mode: Option<AudioMode>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AudioStreamQuery {
+pub(super) struct AudioStreamQuery {
     mode: Option<AudioMode>,
     kind: Option<VoxSessionKind>,
     chat_id: Option<String>,
@@ -62,11 +62,16 @@ async fn start(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
+    Ok(web::Json(start_action(body.into_inner(), &state).await?))
+}
+
+pub(super) async fn start_action(
+    body: AudioStartRequest,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     let mode = body.mode.unwrap_or(AudioMode::Replace);
-    Ok(web::Json(
-        crate::intercept::vox_audio_start(mode.as_str().to_string()).await?,
-    ))
+    crate::intercept::vox_audio_start(mode.as_str().to_string()).await
 }
 
 async fn push(
@@ -75,21 +80,34 @@ async fn push(
     state: web::Data<AppState>,
 ) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
+    Ok(web::Json(push_action(body, &state).await?))
+}
+
+pub(super) async fn push_action(
+    body: web::Bytes,
+    state: &AppState,
+) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
     validate_pcm_chunk(&body)?;
-    Ok(web::Json(
-        crate::intercept::vox_audio_push(body.to_vec()).await?,
-    ))
+    crate::intercept::vox_audio_push(body.to_vec()).await
 }
 
 async fn stream(
     req: HttpRequest,
     query: web::Query<AudioStreamQuery>,
-    mut payload: web::Payload,
+    payload: web::Payload,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
+    stream_action(query.into_inner(), payload, &state).await
+}
+
+pub(super) async fn stream_action(
+    query: AudioStreamQuery,
+    mut payload: web::Payload,
+    state: &AppState,
+) -> Result<HttpResponse, NoaError> {
+    ensure_vox_enabled(state)?;
     let mode = query.mode.unwrap_or(AudioMode::Replace);
     let expected = ExpectedSession {
         kind: query.kind,
@@ -267,8 +285,12 @@ fn playback_offset(bytes: u64) -> Duration {
 
 async fn stop(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Responder, NoaError> {
     authorize(&req, &state)?;
-    ensure_vox_enabled(&state)?;
-    Ok(web::Json(crate::intercept::vox_audio_stop().await?))
+    Ok(web::Json(stop_action(&state).await?))
+}
+
+pub(super) async fn stop_action(state: &AppState) -> Result<serde_json::Value, NoaError> {
+    ensure_vox_enabled(state)?;
+    crate::intercept::vox_audio_stop().await
 }
 
 fn validate_pcm_chunk(bytes: &[u8]) -> Result<(), NoaError> {
