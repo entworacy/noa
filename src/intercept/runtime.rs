@@ -235,6 +235,7 @@ static COMMAND_SENDER: OnceLock<mpsc::Sender<KakaoCommand>> = OnceLock::new();
 type PendingResponse = mpsc::SyncSender<Result<Option<String>, String>>;
 static PENDING: OnceLock<Mutex<HashMap<u64, PendingResponse>>> = OnceLock::new();
 static NEXT_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+static IRIS_FAILED_PID: AtomicU32 = AtomicU32::new(0);
 static KAKAO_FATAL_PID: AtomicU32 = AtomicU32::new(0);
 
 pub fn launch(config: Arc<Settings>) {
@@ -625,6 +626,8 @@ fn run(config: Arc<Settings>) {
         let mut kakao_target = None;
         let mut iris_observed = None;
         let mut kakao_observed = None;
+        let mut kakao_discovery_observed = false;
+        let mut last_kakao_discovered = None;
         let mut next_scan = Instant::now();
         let mut iris_retry = NativeInjectionRetry::new();
         let mut kakao_retry = NativeInjectionRetry::new();
@@ -640,6 +643,13 @@ fn run(config: Arc<Settings>) {
                     .filter(|_| iris_service_ready());
                 iris_target = stable_process_target(&mut iris_observed, discovered);
                 let discovered = config.kakao_hook_enabled.then(kakao_process_pid).flatten();
+                if config.kakao_hook_enabled
+                    && (!kakao_discovery_observed || discovered != last_kakao_discovered)
+                {
+                    log_kakao_process_discovery(discovered);
+                    kakao_discovery_observed = true;
+                    last_kakao_discovered = discovered;
+                }
                 kakao_target = stable_process_target(&mut kakao_observed, discovered);
                 next_scan = now + Duration::from_millis(500);
             }
@@ -727,6 +737,27 @@ unsafe fn refresh_native_agent(
             KAKAO_FATAL_PID.store(0, Ordering::Release);
         } else if target == Some(fatal_pid) {
             return;
+        }
+    }
+    if matches!(kind, NativeKind::Iris) {
+        let failed_pid = IRIS_FAILED_PID.load(Ordering::Acquire);
+        if failed_pid != 0 && target != Some(failed_pid) {
+            IRIS_FAILED_PID.store(0, Ordering::Release);
+        } else if failed_pid != 0
+            && slot
+                .as_ref()
+                .is_some_and(|injection| injection.pid == failed_pid)
+        {
+            *slot = None;
+            IRIS_FAILED_PID.store(0, Ordering::Release);
+            let (consecutive_failures, retry_delay) = retry.record_failure();
+            warn!(
+                pid = failed_pid,
+                process = kind.label(),
+                consecutive_failures,
+                retry_after_seconds = retry_delay.as_secs(),
+                "Rust 에이전트가 초기화 실패를 보고하여 재주입을 예약합니다"
+            );
         }
     }
     let stalled = slot.as_ref().is_some_and(|injection| {
@@ -1325,6 +1356,7 @@ fn handle_iris_connection(
                 .get("pid")
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
+            IRIS_FAILED_PID.store(0, Ordering::Release);
             set_active(true);
             info!(pid, "Iris Rust 에이전트 준비 완료");
             write_iris_response(&mut stream, None, Ok(()))?;
@@ -1338,6 +1370,9 @@ fn handle_iris_connection(
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("알 수 없는 초기화 오류");
+            if let Ok(pid) = u32::try_from(pid) {
+                IRIS_FAILED_PID.store(pid, Ordering::Release);
+            }
             set_active(false);
             warn!(pid, error = detail, "Iris Rust 에이전트 초기화 실패");
             write_iris_response(&mut stream, None, Ok(()))?;
@@ -1671,6 +1706,41 @@ fn kakao_process_pid() -> Option<u32> {
         }
     }
     None
+}
+
+fn log_kakao_process_discovery(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        info!(pid, "KakaoTalk 메인 프로세스 탐지");
+        return;
+    }
+
+    let mut candidates = Vec::new();
+    let mut unreadable_cmdlines = 0_u32;
+    let Ok(entries) = fs::read_dir("/proc") else {
+        warn!("KakaoTalk 프로세스 탐지 진단에서 /proc를 읽지 못했습니다");
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let command = match fs::read(entry.path().join("cmdline")) {
+            Ok(command) => command,
+            Err(_) => {
+                unreadable_cmdlines = unreadable_cmdlines.saturating_add(1);
+                continue;
+            }
+        };
+        let executable = command.split(|byte| *byte == 0).next().unwrap_or_default();
+        if executable.starts_with(b"com.kakao.talk") {
+            candidates.push(format!("{pid}:{}", String::from_utf8_lossy(executable)));
+        }
+    }
+    info!(
+        candidates = ?candidates,
+        unreadable_cmdlines,
+        "KakaoTalk 메인 프로세스를 찾지 못했습니다"
+    );
 }
 
 fn pending() -> &'static Mutex<HashMap<u64, PendingResponse>> {

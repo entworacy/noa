@@ -160,7 +160,10 @@ build_lsplant_shim() {
   "$cxx_compiler" -std=c++20 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
     -I"$project_dir/iris-agent/native" -I"$gum" -I"$xdl_source/include" \
     -c "$project_dir/iris-agent/native/lsplant_shim.cpp" -o "$root/lsplant_shim.o"
-  local objects=("$root/lsplant_shim.o")
+  "$cxx_compiler" -std=c++20 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
+    -I"$project_dir/iris-agent/native" \
+    -c "$project_dir/iris-agent/native/lsplant_shorty.cpp" -o "$root/lsplant_shorty.o"
+  local objects=("$root/lsplant_shim.o" "$root/lsplant_shorty.o")
   local source
   for source in "$xdl_source"/*.c; do
     local object="$root/$(basename "${source%.c}").o"

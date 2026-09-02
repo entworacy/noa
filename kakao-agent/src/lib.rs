@@ -61,6 +61,8 @@ unsafe extern "C" {
     fn dlerror() -> *const c_char;
     fn noa_dlopen_fd(fd: c_int, flags: c_int) -> *mut c_void;
     fn noa_lsplant_init(env: *mut JNIEnv, handle: *mut c_void) -> bool;
+    fn noa_lsplant_last_error() -> *const c_char;
+    fn noa_lsplant_uses_shorty_fallback() -> bool;
     fn noa_lsplant_hook(
         env: *mut JNIEnv,
         handle: *mut c_void,
@@ -249,7 +251,13 @@ fn initialize_runtime() -> Result<(), String> {
             with_attached(runtime.vm as *mut JavaVM, |env| unsafe {
                 log(LOG_INFO, "Kakao agent initialization: initializing LSPlant");
                 if !noa_lsplant_init(env, runtime.lsplant as *mut c_void) {
-                    return Err("LSPlant initialization failed".to_string());
+                    return Err(lsplant_initialization_error());
+                }
+                if noa_lsplant_uses_shorty_fallback() {
+                    log(
+                        LOG_INFO,
+                        "LSPlant ART GetMethodShorty compatibility fallback active",
+                    );
                 }
                 log(
                     LOG_INFO,
@@ -305,6 +313,15 @@ fn initialize_runtime() -> Result<(), String> {
         .clone()?;
     log(LOG_INFO, "Rust KakaoTalk agent ready");
     Ok(())
+}
+
+fn lsplant_initialization_error() -> String {
+    let detail = unsafe {
+        let value = noa_lsplant_last_error();
+        (!value.is_null()).then(|| CStr::from_ptr(value).to_string_lossy().into_owned())
+    }
+    .unwrap_or_else(|| "unknown LSPlant initialization error".to_string());
+    format!("LSPlant initialization failed: {detail}")
 }
 
 fn bootstrap_runtime() -> Result<&'static Runtime, String> {
