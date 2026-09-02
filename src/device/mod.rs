@@ -4,6 +4,13 @@ use crate::{asset::PreparedAsset, failure::NoaError, settings::Settings};
 use std::sync::Arc;
 
 #[cfg(target_os = "android")]
+use std::{
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
+
+#[cfg(target_os = "android")]
 use tokio::sync::Mutex;
 
 #[cfg(any(target_os = "android", test))]
@@ -37,6 +44,7 @@ pub struct KakaoRelay;
 impl KakaoRelay {
     #[cfg(target_os = "android")]
     pub fn connect(config: &Settings) -> Result<Self, NoaError> {
+        verify_art_preflight()?;
         let queue = queue::OutboundQueue::connect(config)?;
         if let Err(error) = ui_agent::ensure_agent() {
             tracing::warn!(%error, "접근성 UI 에이전트 사전 준비 실패; 첫 접근성 요청에서 재시도합니다");
@@ -297,6 +305,66 @@ impl KakaoRelay {
     #[cfg(not(target_os = "android"))]
     pub async fn kick_member(&self, _: i64, _: String, _: String, _: i64) -> Result<(), NoaError> {
         unavailable()
+    }
+}
+
+#[cfg(target_os = "android")]
+const ART_PREFLIGHT_ENV: &str = "NOA_INTERNAL_ART_PREFLIGHT";
+
+#[cfg(target_os = "android")]
+pub fn art_preflight_requested() -> bool {
+    std::env::var_os(ART_PREFLIGHT_ENV).is_some()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn art_preflight_requested() -> bool {
+    false
+}
+
+#[cfg(target_os = "android")]
+pub fn run_art_preflight() -> Result<(), String> {
+    tracing::info!("별도 프로세스에서 Android ART 사전 검사를 실행합니다");
+    let _vm = unsafe { vm::RuntimeVm::launch() }?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn run_art_preflight() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn verify_art_preflight() -> Result<(), NoaError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        NoaError::AndroidUnavailable(format!("ART 사전 검사 실행 파일 확인 실패: {error}"))
+    })?;
+    let mut child = Command::new(executable)
+        .env(ART_PREFLIGHT_ENV, "1")
+        .spawn()
+        .map_err(|error| {
+            NoaError::AndroidUnavailable(format!("ART 사전 검사 시작 실패: {error}"))
+        })?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            NoaError::AndroidUnavailable(format!("ART 사전 검사 상태 확인 실패: {error}"))
+        })? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(NoaError::AndroidUnavailable(format!(
+                    "ART 사전 검사 프로세스가 비정상 종료되었습니다: {status}"
+                )))
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(NoaError::AndroidUnavailable(
+                "ART 사전 검사가 15초 안에 완료되지 않았습니다".to_string(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

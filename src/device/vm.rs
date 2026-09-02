@@ -74,8 +74,10 @@ impl RuntimeVm {
     pub unsafe fn launch() -> Result<jni::JavaVM, String> {
         let runtime_name = c"libandroid_runtime.so";
         let art_name = c"libart.so";
+        tracing::info!(stage = "load-android-runtime", "Android ART 초기화 시작");
         let runtime = unsafe { SharedObject::acquire(runtime_name) }
             .map_err(|error| format!("Android 런타임 로드 실패: {error}"))?;
+        tracing::info!(stage = "prepare-jni-invocation", "Android ART 초기화 진행");
         unsafe { prepare_invocation(&runtime, art_name) }?;
         let mut options = jni::sys::JavaVMInitArgs {
             version: JNI_VERSION_1_6,
@@ -85,15 +87,22 @@ impl RuntimeVm {
         };
         let mut vm_pointer = ptr::null_mut();
         let mut environment_pointer = ptr::null_mut();
+        tracing::info!(stage = "load-native-helper", "Android ART 초기화 진행");
         let invocation = unsafe { SharedObject::acquire(c"libnativehelper.so") }
             .map_err(|error| format!("JNI 호출 계층 로드 실패: {error}"))?;
         let constructor: VmConstructor = unsafe { invocation.require(c"JNI_CreateJavaVM") }?;
+        tracing::info!(stage = "create-java-vm", "Android ART 초기화 진행");
         let status =
             unsafe { constructor(&mut vm_pointer, &mut environment_pointer, &mut options) };
         if status != JNI_OK || vm_pointer.is_null() || environment_pointer.is_null() {
             return Err(format!("ART VM 생성 실패: {status}"));
         }
+        tracing::info!(
+            stage = "register-framework-natives",
+            "Android ART 초기화 진행"
+        );
         unsafe { register_android_classes(&runtime, environment_pointer) }?;
+        tracing::info!(stage = "ready", "Android ART 초기화 완료");
         Ok(unsafe { jni::JavaVM::from_raw(vm_pointer) })
     }
 }

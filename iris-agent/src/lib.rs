@@ -113,6 +113,14 @@ struct BridgeRequest<'a> {
     body: Option<&'a str>,
 }
 
+#[derive(Serialize)]
+struct FailureRequest<'a> {
+    event: &'static str,
+    token: &'a str,
+    pid: u32,
+    error: &'a str,
+}
+
 struct EndpointResponse {
     status: i32,
     content_type: String,
@@ -177,10 +185,18 @@ fn start(config: Bootstrap) {
                 );
             }
         }
-        Err(error) => log(
-            LOG_ERROR,
-            &format!("Iris native hook initialization failed: {error}"),
-        ),
+        Err(error) => {
+            log(
+                LOG_ERROR,
+                &format!("Iris native hook initialization failed: {error}"),
+            );
+            if let Err(report_error) = notify_failure(&error) {
+                log(
+                    LOG_ERROR,
+                    &format!("Iris failure notification failed: {report_error}"),
+                );
+            }
+        }
     }
 }
 
@@ -521,6 +537,17 @@ fn notify_ready() -> Result<(), String> {
         content_type: None,
         body_encoding: None,
         body: None,
+    };
+    bridge_transaction(policy.address, &request).map(|_| ())
+}
+
+fn notify_failure(error: &str) -> Result<(), String> {
+    let policy = policy()?;
+    let request = FailureRequest {
+        event: "error",
+        token: &policy.token,
+        pid: std::process::id(),
+        error,
     };
     bridge_transaction(policy.address, &request).map(|_| ())
 }

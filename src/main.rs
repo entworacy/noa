@@ -35,6 +35,10 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
+    if device::art_preflight_requested() {
+        return device::run_art_preflight().map_err(std::io::Error::other);
+    }
+
     let config = Arc::new(Settings::from_env());
     tokio::fs::create_dir_all(&config.data_dir).await?;
     tokio::fs::create_dir_all(&config.upload_dir).await?;

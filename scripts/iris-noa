@@ -495,6 +495,7 @@ install_command() {
 start_command() {
   local port
   local noa_pid
+  local noa_seen="false"
   local chatonroom_interval
   local loco_history_limit
   load_state
@@ -508,13 +509,25 @@ start_command() {
   ensure_iris_running
   noa_pid="$(remote_pid noa-bin)"
   if [[ -z "$noa_pid" ]]; then
-    adb_run shell "su root sh -c 'nohup env NOA_IRIS_HOOK=true KAKAO_HOOK_ENABLED=$NOA_KAKAO_HOOK_ENABLED NOA_CHATONROOM_INTERVAL_MS=$chatonroom_interval NOA_LOCO_HISTORY_LIMIT=$loco_history_limit NOA_BIND=$NOA_BIND_ADDRESS NOA_API_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TYPES=$NOA_HOOK_TYPE_LIST NOA_IRIS_ENDPOINT_PREFIX=$NOA_IRIS_ENDPOINT_PREFIX $NOA_REMOTE_BIN >/data/local/tmp/noa.log 2>&1 &'"
+    adb_run shell "su root sh -c 'nohup env ANDROID_DATA=/data ANDROID_ROOT=/system NOA_IRIS_HOOK=true KAKAO_HOOK_ENABLED=$NOA_KAKAO_HOOK_ENABLED NOA_CHATONROOM_INTERVAL_MS=$chatonroom_interval NOA_LOCO_HISTORY_LIMIT=$loco_history_limit NOA_BIND=$NOA_BIND_ADDRESS NOA_API_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TOKEN=$NOA_ACCESS_TOKEN NOA_IRIS_HOOK_TYPES=$NOA_HOOK_TYPE_LIST NOA_IRIS_ENDPOINT_PREFIX=$NOA_IRIS_ENDPOINT_PREFIX $NOA_REMOTE_BIN >/data/local/tmp/noa.log 2>&1 &'"
   fi
   port="${NOA_BIND_ADDRESS##*:}"
   ensure_forward "$port"
-  sleep 1
-  noa_pid="$(remote_pid noa-bin)"
+  for _ in {1..450}; do
+    noa_pid="$(remote_pid noa-bin)"
+    if [[ -n "$noa_pid" ]]; then
+      noa_seen="true"
+      if curl --silent --show-error --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
+        break
+      fi
+    elif [[ "$noa_seen" == "true" ]]; then
+      fail "Noa가 초기화 중 종료되었습니다. /data/local/tmp/noa.log와 Android tombstone을 확인하세요."
+    fi
+    sleep 0.1
+  done
   [[ -n "$noa_pid" ]] || fail "Noa가 시작되지 않았습니다. /data/local/tmp/noa.log를 확인하세요."
+  curl --silent --show-error --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1 \
+    || fail "Noa 프로세스는 실행 중이지만 45초 안에 HTTP 준비를 완료하지 못했습니다. /data/local/tmp/noa.log를 확인하세요."
   printf '[noa] Iris와 Noa가 실행 중입니다.\n'
   printf '[noa] 대시보드: http://127.0.0.1:%s/\n' "$port"
 }

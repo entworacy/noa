@@ -51,7 +51,6 @@ const LOG_ERROR: c_int = 6;
 static START: Once = Once::new();
 static EVENT_START: Once = Once::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-static RUNTIME_BOOTSTRAP_ERROR: OnceLock<String> = OnceLock::new();
 static RUNTIME_READY: OnceLock<Result<(), String>> = OnceLock::new();
 
 const LSPLANT: &[u8] = include_bytes!(env!("NOA_LSPLANT_BLOB"));
@@ -106,6 +105,7 @@ struct FailureHello<'a> {
     pid: u32,
     protocol: u8,
     error: &'a str,
+    retryable: bool,
 }
 
 struct Runtime {
@@ -171,12 +171,14 @@ fn serve(config: Bootstrap) {
 
 fn session(stream: &mut TcpStream, config: &Bootstrap) -> Result<(), String> {
     if let Err(error) = initialize_runtime() {
+        let retryable = !initialization_failed();
         let failure = FailureHello {
             event: "error",
             token: &config.token,
             pid: std::process::id(),
             protocol: 1,
             error: &error,
+            retryable,
         };
         let _ = write_json(stream, &failure);
         return Err(error);
@@ -232,7 +234,7 @@ fn ensure_event_bridge(config: &Bootstrap) {
 }
 
 fn initialization_failed() -> bool {
-    RUNTIME_BOOTSTRAP_ERROR.get().is_some() || RUNTIME_READY.get().is_some_and(Result::is_err)
+    RUNTIME_READY.get().is_some_and(Result::is_err)
 }
 
 fn initialize_runtime() -> Result<(), String> {
@@ -306,33 +308,24 @@ fn initialize_runtime() -> Result<(), String> {
 }
 
 fn bootstrap_runtime() -> Result<&'static Runtime, String> {
-    if let Some(error) = RUNTIME_BOOTSTRAP_ERROR.get() {
-        return Err(error.clone());
-    }
     if let Some(runtime) = RUNTIME.get() {
         return Ok(runtime);
     }
-    let result = (|| -> Result<&'static Runtime, String> {
-        log(LOG_INFO, "Kakao agent initialization: locating JVM");
-        let vm = unsafe { locate_vm() }.map_err(|error| format!("locate JVM: {error}"))?;
-        log(LOG_INFO, "Kakao agent initialization: loading LSPlant");
-        let lsplant = load_lsplant().map_err(|error| format!("load LSPlant: {error}"))?;
-        log(LOG_INFO, "Kakao agent initialization: creating DEX adapter");
-        let loader = with_attached(vm, |env| unsafe { create_loader(env) })
-            .map_err(|error| format!("create DEX adapter: {error}"))?;
-        let _ = RUNTIME.set(Runtime {
-            vm: vm as usize,
-            loader: loader as usize,
-            lsplant: lsplant as usize,
-        });
-        RUNTIME
-            .get()
-            .ok_or_else(|| "native runtime could not be stored".to_string())
-    })();
-    if let Err(error) = &result {
-        let _ = RUNTIME_BOOTSTRAP_ERROR.set(error.clone());
-    }
-    result
+    log(LOG_INFO, "Kakao agent initialization: locating JVM");
+    let vm = unsafe { locate_vm() }.map_err(|error| format!("locate JVM: {error}"))?;
+    log(LOG_INFO, "Kakao agent initialization: loading LSPlant");
+    let lsplant = load_lsplant().map_err(|error| format!("load LSPlant: {error}"))?;
+    log(LOG_INFO, "Kakao agent initialization: waiting for Android application");
+    let loader = with_attached(vm, |env| unsafe { create_loader(env) })
+        .map_err(|error| format!("create DEX adapter: {error}"))?;
+    let _ = RUNTIME.set(Runtime {
+        vm: vm as usize,
+        loader: loader as usize,
+        lsplant: lsplant as usize,
+    });
+    RUNTIME
+        .get()
+        .ok_or_else(|| "native runtime could not be stored".to_string())
 }
 
 fn with_env<T>(run: impl FnOnce(*mut JNIEnv) -> Result<T, String>) -> Result<T, String> {
@@ -387,18 +380,25 @@ unsafe fn locate_vm() -> Result<*mut JavaVM, String> {
 
 unsafe fn create_loader(env: *mut JNIEnv) -> Result<jobject, String> {
     let activity_thread = unsafe { find_class(env, "android/app/ActivityThread")? };
-    let application = unsafe {
-        call_static_object(
-            env,
-            activity_thread,
-            "currentApplication",
-            "()Landroid/app/Application;",
-            &[],
-        )?
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let application = loop {
+        let application = unsafe {
+            call_static_object(
+                env,
+                activity_thread,
+                "currentApplication",
+                "()Landroid/app/Application;",
+                &[],
+            )?
+        };
+        if !application.is_null() {
+            break application;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("Android application is not ready after 20 seconds".to_string());
+        }
+        thread::sleep(Duration::from_millis(100));
     };
-    if application.is_null() {
-        return Err("Android application is not ready".to_string());
-    }
     let parent = unsafe {
         call_object(
             env,

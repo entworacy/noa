@@ -211,6 +211,13 @@ impl NativeKind {
             Self::Kakao => set_kakao_active(value),
         }
     }
+
+    fn readiness_timeout(self) -> Duration {
+        match self {
+            Self::Iris => Duration::from_secs(15),
+            Self::Kakao => Duration::from_secs(30),
+        }
+    }
 }
 
 struct NativeInjection {
@@ -617,6 +624,7 @@ fn run(config: Arc<Settings>) {
         let mut iris_target = None;
         let mut kakao_target = None;
         let mut iris_observed = None;
+        let mut kakao_observed = None;
         let mut next_scan = Instant::now();
         let mut iris_retry = NativeInjectionRetry::new();
         let mut kakao_retry = NativeInjectionRetry::new();
@@ -624,9 +632,15 @@ fn run(config: Arc<Settings>) {
             pump();
             let now = Instant::now();
             if now >= next_scan {
-                let discovered = config.iris_hook.enabled.then(iris_process_pid).flatten();
+                let discovered = config
+                    .iris_hook
+                    .enabled
+                    .then(iris_process_pid)
+                    .flatten()
+                    .filter(|_| iris_service_ready());
                 iris_target = stable_process_target(&mut iris_observed, discovered);
-                kakao_target = config.kakao_hook_enabled.then(kakao_process_pid).flatten();
+                let discovered = config.kakao_hook_enabled.then(kakao_process_pid).flatten();
+                kakao_target = stable_process_target(&mut kakao_observed, discovered);
                 next_scan = now + Duration::from_millis(500);
             }
             refresh_native_agent(
@@ -653,6 +667,16 @@ fn run(config: Arc<Settings>) {
             thread::sleep(Duration::from_millis(25));
         }
     }
+}
+
+fn iris_service_ready() -> bool {
+    "127.0.0.1:3000"
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addresses| addresses.next())
+        .is_some_and(|address| {
+            TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
+        })
 }
 
 fn stable_process_target(
@@ -706,7 +730,7 @@ unsafe fn refresh_native_agent(
         }
     }
     let stalled = slot.as_ref().is_some_and(|injection| {
-        !kind.active() && injection.injected_at.elapsed() >= Duration::from_secs(15)
+        !kind.active() && injection.injected_at.elapsed() >= kind.readiness_timeout()
     });
     if stalled {
         *slot = None;
@@ -894,12 +918,14 @@ fn accept_kakao_connection(stream: TcpStream, token: &str) -> Result<NativeConne
     if hello.get("event").and_then(Value::as_str) == Some("error")
         && hello.get("token").and_then(Value::as_str) == Some(token)
     {
-        if let Some(pid) = hello
-            .get("pid")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-        {
-            KAKAO_FATAL_PID.store(pid, Ordering::Release);
+        if hello.get("retryable").and_then(Value::as_bool) != Some(true) {
+            if let Some(pid) = hello
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+            {
+                KAKAO_FATAL_PID.store(pid, Ordering::Release);
+            }
         }
         let detail = hello
             .get("error")
@@ -1301,6 +1327,19 @@ fn handle_iris_connection(
                 .unwrap_or_default();
             set_active(true);
             info!(pid, "Iris Rust 에이전트 준비 완료");
+            write_iris_response(&mut stream, None, Ok(()))?;
+        }
+        Some("error") => {
+            let pid = request
+                .get("pid")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let detail = request
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("알 수 없는 초기화 오류");
+            set_active(false);
+            warn!(pid, error = detail, "Iris Rust 에이전트 초기화 실패");
             write_iris_response(&mut stream, None, Ok(()))?;
         }
         Some("reply") => {

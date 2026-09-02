@@ -123,7 +123,7 @@ ID 필드는 응답에서 문자열로 반환됩니다.
 인증 없는 상태 확인입니다.
 
 ```json
-{"ok":true,"service":"noa","version":"1.3.7"}
+{"ok":true,"service":"noa","version":"1.3.8"}
 ```
 
 ### `GET /api/status`
@@ -132,7 +132,7 @@ ID 필드는 응답에서 문자열로 반환됩니다.
 
 ```json
 {
-  "version":"1.3.7",
+  "version":"1.3.8",
   "revision":"<git-commit-sha>",
   "databaseAvailable":true,
   "androidAvailable":true,
@@ -149,6 +149,10 @@ ID 필드는 응답에서 문자열로 반환됩니다.
 ```
 
 `Enabled`는 설정, `Active`는 에이전트 연결 상태입니다.
+`androidAvailable`은 별도 프로세스의 ART 사전 검사를 통과한 뒤 JNI 전송 계층까지
+준비됐는지를 나타냅니다. ART 사전 검사 프로세스가 충돌하거나 15초 안에 끝나지
+않으면 Noa 서버와 후킹 기능은 제한 모드로 계속 실행되고 이 값만 `false`가 됩니다.
+초기화 단계는 `/data/local/tmp/noa.log`의 `stage` 필드에서 확인할 수 있습니다.
 
 ### `GET /api/rooms`
 
