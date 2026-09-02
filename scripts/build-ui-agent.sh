@@ -127,6 +127,6 @@ javac -source 8 -target 8 -encoding UTF-8 \
   -classpath "$uiautomator_jar" \
   -d "$class_dir" \
   $(find "$project_dir/ui-agent/src" -name '*.java' -print)
-jar --create --file "$build_dir/classes.jar" -C "$class_dir" .
+jar --create --date=1980-01-01T00:00:02Z --file "$build_dir/classes.jar" -C "$class_dir" .
 java -cp "$r8_jar" com.android.tools.r8.D8 --min-api 26 --output "$dex_dir" "$build_dir/classes.jar"
-jar --create --file "$project_dir/assets/noa-uiautomator.jar" -C "$dex_dir" classes.dex
+jar --create --date=1980-01-01T00:00:02Z --file "$project_dir/assets/noa-uiautomator.jar" -C "$dex_dir" classes.dex

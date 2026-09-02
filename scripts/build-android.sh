@@ -12,7 +12,7 @@ if [[ -z "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}" ]]; then
   echo "ANDROID_NDK_HOME 또는 ANDROID_NDK_ROOT를 지정하세요." >&2
   exit 1
 fi
-for command in curl tar unzip javac java jar; do
+for command in curl tar git sha256sum javac java jar; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "$command 명령이 필요합니다." >&2
     exit 1
@@ -35,7 +35,9 @@ compiler_arches=("aarch64" "arm" "i686" "x86_64")
 clang_targets=("aarch64-linux-android" "armv7a-linux-androideabi" "i686-linux-android" "x86_64-linux-android")
 library_targets=("aarch64-linux-android" "arm-linux-androideabi" "i686-linux-android" "x86_64-linux-android")
 frida_version="16.7.19"
-lsplant_version="6.4"
+lsplant_commit="7217ac6f41e2bda549e4acb54e632abb03e5ccaf"
+dex_builder_commit="9d57844a301077abf4c29e061b2458c56a363c8f"
+parallel_hashmap_commit="65775fa09fecaa65d0b0022ab6bf091c0e509445"
 xdl_version="2.4.0"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
@@ -115,20 +117,95 @@ prepare_frida_gum() {
   printf '%s\n' "$root"
 }
 
-prepare_lsplant() {
+prepare_lsplant_source() {
+  local root="$project_dir/.tools/lsplant-source-$lsplant_commit"
+  local downloads="$project_dir/.tools/lsplant-downloads"
+  local marker="$root/.noa-source-ready"
+  local patch_file="$project_dir/patches/lsplant-6.4-optional-fixup-static-trampolines.patch"
+  local patch_sha256
+  local expected_marker
+  patch_sha256="$(sha256sum "$patch_file" | awk '{ print $1 }')"
+  expected_marker="$(printf '%s\n%s\n%s\n%s\n' \
+    "$lsplant_commit" "$dex_builder_commit" "$parallel_hashmap_commit" "$patch_sha256")"
+  if [[ -f "$marker" && "$(cat "$marker")" != "$expected_marker" ]]; then
+    echo "LSPlant 소스 캐시가 현재 빌드 입력과 일치하지 않습니다: $root" >&2
+    echo "해당 디렉터리를 제거한 뒤 다시 빌드하세요." >&2
+    exit 1
+  fi
+  if [[ ! -f "$marker" ]]; then
+    if [[ -e "$root" ]]; then
+      echo "완성되지 않은 LSPlant 소스 캐시가 있습니다: $root" >&2
+      echo "해당 디렉터리를 제거한 뒤 다시 빌드하세요." >&2
+      exit 1
+    fi
+    mkdir -p "$project_dir/.tools" "$downloads"
+    local temporary
+    temporary="$(mktemp -d "$project_dir/.tools/lsplant-source.XXXXXX")"
+    local lsplant_archive="$downloads/lsplant-$lsplant_commit.tar.gz"
+    local dex_builder_archive="$downloads/dex-builder-$dex_builder_commit.tar.gz"
+    local parallel_hashmap_archive="$downloads/parallel-hashmap-$parallel_hashmap_commit.tar.gz"
+    [[ -f "$lsplant_archive" ]] || curl -fL --retry 3 -o "$lsplant_archive" \
+      "https://github.com/LSPosed/LSPlant/archive/$lsplant_commit.tar.gz"
+    [[ -f "$dex_builder_archive" ]] || curl -fL --retry 3 -o "$dex_builder_archive" \
+      "https://github.com/LSPosed/DexBuilder/archive/$dex_builder_commit.tar.gz"
+    [[ -f "$parallel_hashmap_archive" ]] || curl -fL --retry 3 -o "$parallel_hashmap_archive" \
+      "https://github.com/greg7mdp/parallel-hashmap/archive/$parallel_hashmap_commit.tar.gz"
+    mkdir -p "$temporary/source"
+    tar -xzf "$lsplant_archive" --strip-components=1 -C "$temporary/source"
+    mkdir -p "$temporary/source/lsplant/src/main/jni/external/dex_builder"
+    tar -xzf "$dex_builder_archive" --strip-components=1 \
+      -C "$temporary/source/lsplant/src/main/jni/external/dex_builder"
+    mkdir -p "$temporary/source/lsplant/src/main/jni/external/dex_builder/external/parallel_hashmap"
+    tar -xzf "$parallel_hashmap_archive" --strip-components=1 \
+      -C "$temporary/source/lsplant/src/main/jni/external/dex_builder/external/parallel_hashmap"
+    git -C "$temporary/source" apply "$patch_file"
+    printf '%s\n' "$expected_marker" > "$temporary/source/.noa-source-ready"
+    mv "$temporary/source" "$root"
+    rmdir "$temporary"
+  fi
+  printf '%s\n' "$root"
+}
+
+build_lsplant() {
   local abi="$1"
-  local root="$project_dir/.tools/lsplant-aar"
-  local archive="$root/lsplant-standalone-$lsplant_version.aar"
-  local library="$root/$abi/liblsplant.so"
-  if [[ ! -f "$archive" ]]; then
-    mkdir -p "$root"
-    curl -fL --retry 3 -o "$archive" "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/$lsplant_version/lsplant-standalone-$lsplant_version.aar"
-  fi
-  if [[ ! -f "$library" ]]; then
-    mkdir -p "$root/$abi"
-    unzip -p "$archive" "prefab/modules/lsplant/libs/android.$abi/liblsplant.so" > "$library.tmp"
-    mv "$library.tmp" "$library"
-  fi
+  local clang_target="$2"
+  local source_root="$3"
+  local source="$source_root/lsplant/src/main/jni"
+  local dex_builder="$source/external/dex_builder"
+  local root="$project_dir/.tools/lsplant-build/$abi"
+  local library="$root/liblsplant.so"
+  local compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang++"
+  local strip="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+  local sources=(
+    "$source/lsplant.cc"
+    "$dex_builder/dex_builder.cc"
+    "$dex_builder/dex_helper.cc"
+    "$dex_builder/slicer/reader.cc"
+    "$dex_builder/slicer/writer.cc"
+    "$dex_builder/slicer/dex_ir.cc"
+    "$dex_builder/slicer/common.cc"
+    "$dex_builder/slicer/dex_format.cc"
+    "$dex_builder/slicer/dex_utf8.cc"
+    "$dex_builder/slicer/dex_bytecode.cc"
+    "$dex_builder/slicer/sha1.cpp"
+  )
+  mkdir -p "$root"
+  "$compiler" -std=c++20 -shared -fPIC -Oz -flto -ffunction-sections -fdata-sections \
+    -Wno-c++23-extensions -Wno-gnu-string-literal-operator-template -Wno-unused-value \
+    -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-soname,liblsplant.so -static-libstdc++ \
+    -I"$source" -I"$source/include" -I"$dex_builder/include" \
+    -I"$dex_builder/external/parallel_hashmap" \
+    "${sources[@]}" -llog -lz -o "$library.tmp"
+  "$strip" --strip-all "$library.tmp"
+  mv "$library.tmp" "$library"
+  assert_agent_runtime_resolved "$library"
+  for symbol in Init Hook Deoptimize; do
+    if ! "$llvm_readelf" --dyn-syms --wide "$library" \
+      | awk -v symbol="$symbol" '$7 != "UND" && $8 ~ ("_ZN7lsplant2v2[0-9]+" symbol) { found = 1 } END { exit !found }'; then
+      echo "liblsplant.so에 lsplant::v2::$symbol 공개 심볼이 없습니다." >&2
+      exit 1
+    fi
+  done
   printf '%s\n' "$library"
 }
 
@@ -176,6 +253,7 @@ build_lsplant_shim() {
 }
 
 xdl_root="$(prepare_xdl)"
+lsplant_source="$(prepare_lsplant_source)"
 
 for index in "${!abis[@]}"; do
   abi="${abis[$index]}"
@@ -186,7 +264,7 @@ for index in "${!abis[@]}"; do
   library_target="${library_targets[$index]}"
   frida_core="$(prepare_frida_core "$frida_arch")"
   frida_gum="$(prepare_frida_gum "$frida_arch")"
-  lsplant="$(prepare_lsplant "$abi")"
+  lsplant="$(build_lsplant "$abi" "$clang_target" "$lsplant_source")"
   lsplant_shim="$(build_lsplant_shim "$abi" "$clang_target" "$frida_gum" "$xdl_root")"
   cxx_runtime_dir="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$library_target"
   [[ -f "$cxx_runtime_dir/libc++_static.a" && -f "$cxx_runtime_dir/libc++abi.a" ]] || {

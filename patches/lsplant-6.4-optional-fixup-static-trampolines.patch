@@ -1,0 +1,17 @@
+diff --git a/lsplant/src/main/jni/art/runtime/class_linker.hpp b/lsplant/src/main/jni/art/runtime/class_linker.hpp
+index 073abf9..1e9e10c 100644
+--- a/lsplant/src/main/jni/art/runtime/class_linker.hpp
++++ b/lsplant/src/main/jni/art/runtime/class_linker.hpp
+@@ -142,10 +142,8 @@ public:
+             HookSyms(handler, ShouldUseInterpreterEntrypoint);
+         }
+ 
+-        if (!HookSyms(handler, FixupStaticTrampolinesWithThread, FixupStaticTrampolines,
+-                      FixupStaticTrampolinesRaw)) {
+-            return false;
+-        }
++        HookSyms(handler, FixupStaticTrampolinesWithThread, FixupStaticTrampolines,
++                 FixupStaticTrampolinesRaw);
+ 
+         if (!HookSyms(handler, RegisterNativeClassLinker, RegisterNative, RegisterNativeFast,
+                       RegisterNativeThread) ||
