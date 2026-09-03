@@ -38,6 +38,7 @@ frida_version="16.7.19"
 lsplant_commit="7217ac6f41e2bda549e4acb54e632abb03e5ccaf"
 dex_builder_commit="9d57844a301077abf4c29e061b2458c56a363c8f"
 parallel_hashmap_commit="65775fa09fecaa65d0b0022ab6bf091c0e509445"
+lsplant_source_revision="2"
 xdl_version="2.4.0"
 ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 llvm_readelf="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
@@ -118,14 +119,14 @@ prepare_frida_gum() {
 }
 
 prepare_lsplant_source() {
-  local root="$project_dir/.tools/lsplant-source-$lsplant_commit"
+  local root="$project_dir/.tools/lsplant-source-r$lsplant_source_revision-$lsplant_commit"
   local downloads="$project_dir/.tools/lsplant-downloads"
   local marker="$root/.noa-source-ready"
   local patch_file="$project_dir/patches/lsplant-6.4-optional-fixup-static-trampolines.patch"
   local patch_sha256
   local expected_marker
   patch_sha256="$(sha256sum "$patch_file" | awk '{ print $1 }')"
-  expected_marker="$(printf '%s\n%s\n%s\n%s\n' \
+  expected_marker="$(printf '%s\n%s\n%s\n%s\n%s\n' "$lsplant_source_revision" \
     "$lsplant_commit" "$dex_builder_commit" "$parallel_hashmap_commit" "$patch_sha256")"
   if [[ -f "$marker" && "$(cat "$marker")" != "$expected_marker" ]]; then
     echo "LSPlant 소스 캐시가 현재 빌드 입력과 일치하지 않습니다: $root" >&2
@@ -158,7 +159,11 @@ prepare_lsplant_source() {
     mkdir -p "$temporary/source/lsplant/src/main/jni/external/dex_builder/external/parallel_hashmap"
     tar -xzf "$parallel_hashmap_archive" --strip-components=1 \
       -C "$temporary/source/lsplant/src/main/jni/external/dex_builder/external/parallel_hashmap"
-    git -C "$temporary/source" apply "$patch_file"
+    (
+      cd "$temporary/source"
+      GIT_CEILING_DIRECTORIES="$project_dir" git apply "$patch_file"
+      GIT_CEILING_DIRECTORIES="$project_dir" git apply --reverse --check "$patch_file"
+    )
     printf '%s\n' "$expected_marker" > "$temporary/source/.noa-source-ready"
     mv "$temporary/source" "$root"
     rmdir "$temporary"
