@@ -14,6 +14,37 @@ Noa는 목적이 다른 세 어댑터를 사용합니다.
 
 Kakao/Iris 네이티브 에이전트는 최종 Noa 바이너리에 포함됩니다. Noa가 로컬 listener와 인증 token을 준비한 뒤 Frida를 이용해 대상 프로세스에 주입하고, 에이전트가 loopback TCP로 다시 연결합니다. 외부 네트워크에 에이전트 명령 포트를 공개하지 않습니다.
 
+## 코드 경계
+
+`src/intercept/runtime.rs`는 공개 호출을 연결하며, 구현은 다음 모듈에 둡니다.
+
+| 모듈 | 책임 |
+|---|---|
+| `runtime/supervisor.rs`, `process.rs` | 대상 프로세스 탐색, 주입, 준비 확인과 재시도 |
+| `runtime/frida.rs` | Frida Core FFI |
+| `runtime/commands` | Kakao 명령 API, 대기 응답 관리와 TCP 전송 |
+| `runtime/events.rs` | LOCO·DB 무효화 이벤트 수신 |
+| `runtime/iris_bridge` | Iris 요청 수신과 Noa HTTP 전달 |
+| `agent-runtime/src` | 두 에이전트가 공유하는 JVM 연결, LSPlant 로딩과 ABI |
+| `agent-runtime/native` | LSPlant shim, ART 심볼 탐색과 shorty 호환 처리 |
+| 각 에이전트의 `src/java.rs` | 해당 어댑터의 JNI 리플렉션·값 변환 |
+
+공통 `agent-runtime`은 Iris/Kakao 클래스명, 명령 정책, 전역 준비 상태에 의존하지 않습니다. 각 에이전트에 정적으로 링크되며 JVM과 훅 상태는 대상 프로세스 안에 유지됩니다. 어댑터별 클래스 로딩·초기화 순서는 각 에이전트가 소유합니다.
+
+`agent-protocol`은 서버와 Kakao 에이전트가 공유하는 채널 이름·명령 분류·프로토콜 버전을 정의합니다. Kakao 연결은 각자 TCP 소켓, 실행 스레드, bounded 대기열과 대기 응답을 가집니다.
+
+| 채널 | 명령 | 최대 대기 요청 |
+| --- | --- | --- |
+| `control` | 메시지·참여자·오픈채팅 명령 | 32 |
+| `vox` | 보이스톡 시작, 보이스룸 생성·입장·나가기 | 32 |
+| `audio` | VOX 상태 조회, PCM 시작·push·중지 | 8 |
+
+보이스룸 제어와 일반 명령의 응답 대기는 오디오 채널을 막지 않습니다. 큐가 가득 차면 해당 요청을 거부하며, timeout은 큐 대기 시간도 포함합니다. 대기 중 timeout·연결 종료로 무효화된 요청은 에이전트로 보내지 않습니다. 이미 전송된 Kakao 작업을 취소하거나 자동 재시도하지는 않습니다.
+
+연결 종료는 해당 채널의 대기 요청만 실패시키며, Kakao PID가 바뀌면 모든 채널을 무효화합니다. 재연결은 채널별로 수행합니다. 초기 JVM·DEX·훅 설치는 기존대로 한 번 완료한 뒤 VOX 스레드를 시작하므로 기능별 초기화 자체를 독립시킨 구조는 아닙니다.
+
+내부 handshake는 프로토콜 `2`, 토큰, 채널명과 대상 PID를 검증합니다. 서버와 내장 에이전트를 함께 빌드·교체해야 하며 구형 에이전트와의 혼용은 거부합니다. 외부 HTTP 경로와 본문은 유지됩니다. `/api/status`의 `voxControlActive`, `voxAudioActive`는 각 전송 채널의 연결 준비 상태이며, 실제 VOX 오디오 훅 설치 여부는 VOX status의 `audio.hookReady`로 확인합니다.
+
 ## Kakao 에이전트 초기화
 
 Kakao agent는 현재 Android JavaVM을 찾고 스레드를 attach한 뒤 내장 DEX를 `InMemoryDexClassLoader`로 로드합니다. Java bridge의 native callback을 등록하고 LSPlant를 초기화한 다음 필요한 KakaoTalk 메서드만 정확한 이름·매개변수 목록으로 찾아 hook합니다.
@@ -58,6 +89,8 @@ VOX 기능은 base의 `VoxModuleFacade` 계약, `vox_main` manager, `com.kakao.v
 - `mix`: 실제 마이크 sample과 공급 PCM을 포화 덧셈합니다. queue가 비면 원래 마이크 sample을 유지합니다.
 
 queue는 192,000바이트로 제한하며 넘치면 지연 누적 대신 가장 오래된 PCM을 버립니다. 한 push는 최대 96,000바이트이고 완전한 16-bit sample이어야 합니다. VOX hook 설치 실패는 채팅·LOCO hook 전체를 실패시키지 않지만 VOX audio 시작은 거부합니다.
+
+오디오 연결 종료를 감지하면 남은 PCM을 비웁니다. `replace` 활성 상태는 유지해 재연결 중에도 무음을 보내며, 실제 마이크로 돌아가려면 명시적으로 audio stop을 호출해야 합니다. `mix`는 원래 마이크 sample을 유지합니다.
 
 ## 접근성 경로
 

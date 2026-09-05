@@ -1,0 +1,11 @@
+[package]
+name = "noa-agent-runtime"
+version = "0.1.0"
+edition = "2024"
+license-file = "../LICENSE"
+
+[dependencies]
+jni = "0.22"
+libc = "0.2"
+
+[workspace]

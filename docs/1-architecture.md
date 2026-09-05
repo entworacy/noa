@@ -16,6 +16,7 @@ Noa는 Android 안에서 실행되는 단일 Rust HTTP 서비스입니다. Kakao
 | Reconciler | `src/reconcile.rs` | DB 변경을 Room 캐시와 감사 이벤트로 반영 |
 | Kakao agent | `kakao-agent` | KakaoTalk 프로세스 내부 명령 및 LOCO/Room 콜백 |
 | Iris agent | `iris-agent` | Iris `/reply` 확장과 Noa gateway 연결 |
+| 공통 네이티브 계층 | `agent-runtime` | JVM 연결, LSPlant 로딩·ABI 및 C++ shim |
 | UI agent | `ui-agent` | 상주 UiAutomator 의미 기반 탐색과 클릭 |
 
 HTTP 서버는 외부 요청을 검증한 뒤 Room catalog 또는 Android relay로 전달합니다. 프로세스 내부 작업이 필요한 경우 `src/intercept`가 로컬 TCP 명령 채널을 통해 Kakao/Iris 에이전트와 통신합니다. 에이전트가 보내는 DB 무효화와 LOCO 이벤트는 별도 이벤트 채널로 들어옵니다.
@@ -37,6 +38,8 @@ DB 또는 Android relay를 열지 못해도 서버는 제한 모드로 시작할
 Actix worker는 HTTP 파싱과 응답을 담당합니다. SQLite처럼 블로킹될 수 있는 작업은 `spawn_blocking`으로 옮겨 async executor를 막지 않습니다. Room 목록은 `RwLock<Vec<Room>>` 캐시로 제공하고 감사 이벤트는 `broadcast` 채널을 사용해 SSE 구독자에게 전달합니다.
 
 화면을 조작하는 입장·공유·강퇴·나가기 작업은 동일한 접근성 잠금을 공유합니다. 요청이 동시에 들어와도 두 작업이 KakaoTalk 화면을 서로 덮어쓰지 않습니다. Kakao 에이전트 명령은 ID별 상태와 timeout을 가지며, 중복 활성 ID는 기존 상태를 덮어쓰지 않고 거부합니다.
+
+Kakao 전송은 일반 명령(`control`), 보이스룸 제어(`vox`), PCM·재생 상태(`audio`)의 세 TCP 채널로 분리됩니다. 각 채널이 독립된 스레드·bounded 대기열·연결 상태를 가지므로 일반 명령이나 보이스룸 입장의 응답 대기가 PCM 전송을 지연시키지 않습니다. 상세 계약은 [에이전트 구조](4-agents.md)를 참고하세요.
 
 ## 인증 경계
 

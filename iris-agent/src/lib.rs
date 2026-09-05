@@ -1,9 +1,21 @@
+mod java;
+pub(crate) use java::{
+    array_element, array_length, call_static_object, check, find_class, find_method, int_value,
+    invoke_reflect, java_byte_array, java_string, load_class, native_method, new_object,
+    new_string, object_text, object_value, static_object, throw_runtime,
+};
+use noa_agent_runtime::{
+    jvm::{locate_vm, with_attached},
+    lsplant::{
+        initialization_error as lsplant_initialization_error, noa_lsplant_hook, noa_lsplant_init,
+        noa_lsplant_uses_shorty_fallback,
+    },
+};
 use std::{
     collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_char, c_int, c_void},
     io::{BufRead, BufReader, Write},
     net::{SocketAddr, TcpStream},
-    os::fd::FromRawFd,
     ptr,
     sync::{
         Mutex, Once, OnceLock,
@@ -13,10 +25,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use jni::sys::{
-    JNI_EDETACHED, JNI_OK, JNI_VERSION_1_6, JNIEnv, JNINativeMethod, JavaVM, jbyteArray, jclass,
-    jint, jlong, jobject, jobjectArray, jstring, jvalue,
-};
+use jni::sys::{JNI_OK, JNIEnv, jbyteArray, jclass, jint, jlong, jobject, jobjectArray, jstring};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -41,23 +50,8 @@ static ROUTING_INSPECTION_BYPASSED: AtomicBool = AtomicBool::new(false);
 static ENDPOINT_DISPATCHED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    fn dlerror() -> *const c_char;
-    fn noa_dlopen_fd(fd: c_int, flags: c_int) -> *mut c_void;
-    fn noa_lsplant_init(env: *mut JNIEnv, handle: *mut c_void) -> bool;
-    fn noa_lsplant_last_error() -> *const c_char;
-    fn noa_lsplant_uses_shorty_fallback() -> bool;
-    fn noa_lsplant_hook(
-        env: *mut JNIEnv,
-        handle: *mut c_void,
-        target: jobject,
-        hooker: jobject,
-        callback: jobject,
-    ) -> jobject;
     fn __android_log_write(priority: c_int, tag: *const c_char, text: *const c_char) -> c_int;
 }
-
-type GetCreatedVms = unsafe extern "system" fn(*mut *mut JavaVM, i32, *mut i32) -> i32;
 
 #[derive(Deserialize)]
 struct Bootstrap {
@@ -204,67 +198,60 @@ fn start(config: Bootstrap) {
 
 fn initialize_runtime() -> Result<(), String> {
     let vm = unsafe { locate_vm() }?;
-    with_attached(vm, |env| unsafe {
-        let parent = system_loader(env)?;
-        let loader = create_loader(env, parent)?;
-        register_bridge(env, loader)?;
-        let lsplant = load_lsplant()?;
-        if !noa_lsplant_init(env, lsplant) {
-            return Err(lsplant_initialization_error());
-        }
-        if noa_lsplant_uses_shorty_fallback() {
-            log(
-                LOG_INFO,
-                "LSPlant ART GetMethodShorty compatibility fallback active",
-            );
-        }
-        let _ = RUNTIME.set(Runtime {
-            loader: loader as usize,
-            lsplant: lsplant as usize,
-        });
-        install_hook(
-            env,
-            parent,
-            "party.qwer.iris.model.ReplyRequest$$serializer",
-            "deserialize",
-            &["kotlinx.serialization.encoding.Decoder"],
-            KIND_DESERIALIZE,
-        )?;
-        install_hook(
-            env,
-            parent,
-            "party.qwer.iris.Replier$Companion",
-            "sendMessage",
-            &[
-                "java.lang.String",
-                "long",
-                "java.lang.String",
-                "java.lang.Long",
-            ],
-            KIND_SEND,
-        )?;
-        install_hook(
-            env,
-            parent,
-            "io.ktor.server.routing.RoutingRoot",
-            "interceptor",
-            &[
-                "io.ktor.util.pipeline.PipelineContext",
-                "kotlin.coroutines.Continuation",
-            ],
-            KIND_ROUTING,
-        )?;
-        Ok(())
-    })
-}
-
-fn lsplant_initialization_error() -> String {
-    let detail = unsafe {
-        let value = noa_lsplant_last_error();
-        (!value.is_null()).then(|| CStr::from_ptr(value).to_string_lossy().into_owned())
+    unsafe {
+        with_attached(vm, |env| {
+            let parent = system_loader(env)?;
+            let loader = create_loader(env, parent)?;
+            register_bridge(env, loader)?;
+            let lsplant = load_lsplant()?;
+            if !noa_lsplant_init(env, lsplant) {
+                return Err(lsplant_initialization_error());
+            }
+            if noa_lsplant_uses_shorty_fallback() {
+                log(
+                    LOG_INFO,
+                    "LSPlant ART GetMethodShorty compatibility fallback active",
+                );
+            }
+            let _ = RUNTIME.set(Runtime {
+                loader: loader as usize,
+                lsplant: lsplant as usize,
+            });
+            install_hook(
+                env,
+                parent,
+                "party.qwer.iris.model.ReplyRequest$$serializer",
+                "deserialize",
+                &["kotlinx.serialization.encoding.Decoder"],
+                KIND_DESERIALIZE,
+            )?;
+            install_hook(
+                env,
+                parent,
+                "party.qwer.iris.Replier$Companion",
+                "sendMessage",
+                &[
+                    "java.lang.String",
+                    "long",
+                    "java.lang.String",
+                    "java.lang.Long",
+                ],
+                KIND_SEND,
+            )?;
+            install_hook(
+                env,
+                parent,
+                "io.ktor.server.routing.RoutingRoot",
+                "interceptor",
+                &[
+                    "io.ktor.util.pipeline.PipelineContext",
+                    "kotlin.coroutines.Continuation",
+                ],
+                KIND_ROUTING,
+            )?;
+            Ok(())
+        })
     }
-    .unwrap_or_else(|| "unknown LSPlant initialization error".to_string());
-    format!("LSPlant initialization failed: {detail}")
 }
 
 unsafe fn install_hook(
@@ -709,49 +696,6 @@ fn next_sequence() -> u64 {
     *value
 }
 
-unsafe fn locate_vm() -> Result<*mut JavaVM, String> {
-    let address = unsafe { dlsym(ptr::null_mut(), c"JNI_GetCreatedJavaVMs".as_ptr()) };
-    if address.is_null() {
-        return Err("JNI_GetCreatedJavaVMs was not found".to_string());
-    }
-    let get_vms: GetCreatedVms = unsafe { std::mem::transmute(address) };
-    let mut vm = ptr::null_mut();
-    let mut count = 0;
-    let status = unsafe { get_vms(&mut vm, 1, &mut count) };
-    if status != JNI_OK || count < 1 || vm.is_null() {
-        return Err(format!(
-            "JNI_GetCreatedJavaVMs failed: {status}, count={count}"
-        ));
-    }
-    Ok(vm)
-}
-
-fn with_attached<T>(
-    vm: *mut JavaVM,
-    run: impl FnOnce(*mut JNIEnv) -> Result<T, String>,
-) -> Result<T, String> {
-    unsafe {
-        let functions = &**vm;
-        let mut raw = ptr::null_mut();
-        let mut detach = false;
-        let status = (functions.v1_4.GetEnv)(vm, &mut raw, JNI_VERSION_1_6);
-        if status == JNI_EDETACHED {
-            let attached = (functions.v1_4.AttachCurrentThread)(vm, &mut raw, ptr::null_mut());
-            if attached != JNI_OK {
-                return Err(format!("AttachCurrentThread failed: {attached}"));
-            }
-            detach = true;
-        } else if status != JNI_OK {
-            return Err(format!("GetEnv failed: {status}"));
-        }
-        let result = run(raw.cast());
-        if detach {
-            let _ = (functions.v1_4.DetachCurrentThread)(vm);
-        }
-        result
-    }
-}
-
 unsafe fn system_loader(env: *mut JNIEnv) -> Result<jobject, String> {
     let class = unsafe { find_class(env, "java/lang/ClassLoader")? };
     unsafe {
@@ -911,29 +855,7 @@ unsafe fn new_endpoint_response(
 }
 
 fn load_lsplant() -> Result<*mut c_void, String> {
-    let name = CString::new("noa-lsplant").unwrap();
-    let fd =
-        unsafe { libc::syscall(libc::SYS_memfd_create, name.as_ptr(), libc::MFD_CLOEXEC) } as c_int;
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    file.write_all(LSPLANT).map_err(|error| error.to_string())?;
-    file.flush().map_err(|error| error.to_string())?;
-    let handle = unsafe { noa_dlopen_fd(fd, libc::RTLD_NOW | libc::RTLD_LOCAL) };
-    if handle.is_null() {
-        let detail = unsafe {
-            let value = dlerror();
-            if value.is_null() {
-                "unknown dlopen error".to_string()
-            } else {
-                CStr::from_ptr(value).to_string_lossy().into_owned()
-            }
-        };
-        Err(format!("LSPlant load failed: {detail}"))
-    } else {
-        Ok(handle)
-    }
+    noa_agent_runtime::lsplant::load(LSPLANT, c"noa-lsplant")
 }
 
 unsafe fn app_class(env: *mut JNIEnv, name: &str) -> Result<jclass, String> {
@@ -942,84 +864,6 @@ unsafe fn app_class(env: *mut JNIEnv, name: &str) -> Result<jclass, String> {
         .ok_or_else(|| "runtime is unavailable".to_string())?;
     let parent = unsafe { system_loader(env)? };
     unsafe { load_class(env, parent, name) }
-}
-
-unsafe fn load_class(env: *mut JNIEnv, loader: jobject, name: &str) -> Result<jclass, String> {
-    let name = unsafe { new_string(env, name)? };
-    let class = unsafe {
-        call_object(
-            env,
-            loader,
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[object_value(name)],
-        )?
-    };
-    if class.is_null() {
-        Err("class loader returned null".to_string())
-    } else {
-        Ok(class.cast())
-    }
-}
-
-unsafe fn find_method(
-    env: *mut JNIEnv,
-    class: jclass,
-    name: &str,
-    parameter_types: &[&str],
-) -> Result<jobject, String> {
-    let methods = unsafe {
-        call_object(
-            env,
-            class,
-            "getDeclaredMethods",
-            "()[Ljava/lang/reflect/Method;",
-            &[],
-        )? as jobjectArray
-    };
-    let count = unsafe { array_length(env, methods)? };
-    for index in 0..count {
-        let method = unsafe { array_element(env, methods, index)? };
-        let method_name =
-            unsafe { call_object(env, method, "getName", "()Ljava/lang/String;", &[])? };
-        if unsafe { java_string(env, method_name.cast())? } != name {
-            continue;
-        }
-        let parameters = unsafe {
-            call_object(
-                env,
-                method,
-                "getParameterTypes",
-                "()[Ljava/lang/Class;",
-                &[],
-            )? as jobjectArray
-        };
-        if unsafe { array_length(env, parameters)? } as usize != parameter_types.len() {
-            continue;
-        }
-        let mut matches = true;
-        for (parameter_index, expected) in parameter_types.iter().enumerate() {
-            let parameter = unsafe { array_element(env, parameters, parameter_index as i32)? };
-            let actual = unsafe { class_name(env, parameter.cast())? };
-            if actual != *expected {
-                matches = false;
-                break;
-            }
-        }
-        if matches {
-            unsafe { call_void(env, method, "setAccessible", "(Z)V", &[bool_value(true)])? };
-            return Ok(method);
-        }
-    }
-    Err(format!(
-        "method {name}({}) was not found",
-        parameter_types.join(", ")
-    ))
-}
-
-unsafe fn class_name(env: *mut JNIEnv, class: jclass) -> Result<String, String> {
-    let name = unsafe { call_object(env, class, "getName", "()Ljava/lang/String;", &[])? };
-    unsafe { java_string(env, name.cast()) }
 }
 
 unsafe fn make_json_primitive(env: *mut JNIEnv, text: &str) -> Result<jobject, String> {
@@ -1093,275 +937,6 @@ unsafe fn invoke_backup(
         values.push(unsafe { array_element(env, args, index)? });
     }
     unsafe { invoke_reflect(env, backup, receiver, &values) }
-}
-
-unsafe fn invoke_reflect(
-    env: *mut JNIEnv,
-    method: jobject,
-    receiver: jobject,
-    arguments: &[jobject],
-) -> Result<jobject, String> {
-    let array = unsafe { object_array(env, arguments)? };
-    unsafe {
-        call_object(
-            env,
-            method,
-            "invoke",
-            "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
-            &[object_value(receiver), object_value(array)],
-        )
-    }
-}
-
-unsafe fn static_object(
-    env: *mut JNIEnv,
-    class: jclass,
-    name: &str,
-    signature: &str,
-) -> Result<jobject, String> {
-    let name = CString::new(name).map_err(|_| "field name contains NUL".to_string())?;
-    let signature =
-        CString::new(signature).map_err(|_| "field signature contains NUL".to_string())?;
-    let field =
-        unsafe { ((**env).v1_4.GetStaticFieldID)(env, class, name.as_ptr(), signature.as_ptr()) };
-    unsafe { check(env, "resolve static field")? };
-    let value = unsafe { ((**env).v1_4.GetStaticObjectField)(env, class, field) };
-    unsafe { check(env, "read static field")? };
-    if value.is_null() {
-        Err("static field is null".to_string())
-    } else {
-        Ok(value)
-    }
-}
-
-unsafe fn find_class(env: *mut JNIEnv, name: &str) -> Result<jclass, String> {
-    let name = CString::new(name).map_err(|_| "class name contains NUL".to_string())?;
-    let class = unsafe { ((**env).v1_4.FindClass)(env, name.as_ptr()) };
-    unsafe { check(env, "find Java class")? };
-    if class.is_null() {
-        Err("Java class is null".to_string())
-    } else {
-        Ok(class)
-    }
-}
-
-unsafe fn new_object(
-    env: *mut JNIEnv,
-    class: jclass,
-    signature: &str,
-    arguments: &[jvalue],
-) -> Result<jobject, String> {
-    let signature =
-        CString::new(signature).map_err(|_| "constructor signature contains NUL".to_string())?;
-    let constructor =
-        unsafe { ((**env).v1_4.GetMethodID)(env, class, c"<init>".as_ptr(), signature.as_ptr()) };
-    unsafe { check(env, "resolve constructor")? };
-    let object = unsafe { ((**env).v1_4.NewObjectA)(env, class, constructor, arguments.as_ptr()) };
-    unsafe { check(env, "construct Java object")? };
-    if object.is_null() {
-        Err("constructed Java object is null".to_string())
-    } else {
-        Ok(object)
-    }
-}
-
-unsafe fn call_object(
-    env: *mut JNIEnv,
-    object: jobject,
-    name: &str,
-    signature: &str,
-    arguments: &[jvalue],
-) -> Result<jobject, String> {
-    let class = unsafe { ((**env).v1_4.GetObjectClass)(env, object) };
-    unsafe { check(env, "resolve Java object class")? };
-    let name = CString::new(name).map_err(|_| "method name contains NUL".to_string())?;
-    let signature =
-        CString::new(signature).map_err(|_| "method signature contains NUL".to_string())?;
-    let method =
-        unsafe { ((**env).v1_4.GetMethodID)(env, class, name.as_ptr(), signature.as_ptr()) };
-    unsafe { check(env, "resolve Java method")? };
-    let result =
-        unsafe { ((**env).v1_4.CallObjectMethodA)(env, object, method, arguments.as_ptr()) };
-    unsafe { check(env, "call Java method")? };
-    Ok(result)
-}
-
-unsafe fn call_static_object(
-    env: *mut JNIEnv,
-    class: jclass,
-    name: &str,
-    signature: &str,
-    arguments: &[jvalue],
-) -> Result<jobject, String> {
-    let name = CString::new(name).map_err(|_| "method name contains NUL".to_string())?;
-    let signature =
-        CString::new(signature).map_err(|_| "method signature contains NUL".to_string())?;
-    let method =
-        unsafe { ((**env).v1_4.GetStaticMethodID)(env, class, name.as_ptr(), signature.as_ptr()) };
-    unsafe { check(env, "resolve static Java method")? };
-    let result =
-        unsafe { ((**env).v1_4.CallStaticObjectMethodA)(env, class, method, arguments.as_ptr()) };
-    unsafe { check(env, "call static Java method")? };
-    Ok(result)
-}
-
-unsafe fn call_void(
-    env: *mut JNIEnv,
-    object: jobject,
-    name: &str,
-    signature: &str,
-    arguments: &[jvalue],
-) -> Result<(), String> {
-    let class = unsafe { ((**env).v1_4.GetObjectClass)(env, object) };
-    unsafe { check(env, "resolve Java object class")? };
-    let name = CString::new(name).map_err(|_| "method name contains NUL".to_string())?;
-    let signature =
-        CString::new(signature).map_err(|_| "method signature contains NUL".to_string())?;
-    let method =
-        unsafe { ((**env).v1_4.GetMethodID)(env, class, name.as_ptr(), signature.as_ptr()) };
-    unsafe { check(env, "resolve Java void method")? };
-    unsafe { ((**env).v1_4.CallVoidMethodA)(env, object, method, arguments.as_ptr()) };
-    unsafe { check(env, "call Java void method") }
-}
-
-unsafe fn object_array(env: *mut JNIEnv, values: &[jobject]) -> Result<jobjectArray, String> {
-    let class = unsafe { find_class(env, "java/lang/Object")? };
-    let array =
-        unsafe { ((**env).v1_4.NewObjectArray)(env, values.len() as i32, class, ptr::null_mut()) };
-    unsafe { check(env, "create object array")? };
-    for (index, value) in values.iter().enumerate() {
-        unsafe { ((**env).v1_4.SetObjectArrayElement)(env, array, index as i32, *value) };
-        unsafe { check(env, "write object array")? };
-    }
-    Ok(array)
-}
-
-unsafe fn array_length(env: *mut JNIEnv, array: jobjectArray) -> Result<i32, String> {
-    let length = unsafe { ((**env).v1_4.GetArrayLength)(env, array) };
-    unsafe { check(env, "read array length")? };
-    Ok(length)
-}
-
-unsafe fn array_element(
-    env: *mut JNIEnv,
-    array: jobjectArray,
-    index: i32,
-) -> Result<jobject, String> {
-    let value = unsafe { ((**env).v1_4.GetObjectArrayElement)(env, array, index) };
-    unsafe { check(env, "read array element")? };
-    Ok(value)
-}
-
-unsafe fn object_text(env: *mut JNIEnv, object: jobject) -> Result<String, String> {
-    if object.is_null() {
-        return Err("Java object is null".to_string());
-    }
-    let text = unsafe { call_object(env, object, "toString", "()Ljava/lang/String;", &[])? };
-    unsafe { java_string(env, text.cast()) }
-}
-
-unsafe fn new_string(env: *mut JNIEnv, value: &str) -> Result<jobject, String> {
-    let utf16 = value.encode_utf16().collect::<Vec<_>>();
-    let string = unsafe { ((**env).v1_4.NewString)(env, utf16.as_ptr(), utf16.len() as i32) };
-    unsafe { check(env, "create Java string")? };
-    if string.is_null() {
-        Err("Java string is null".to_string())
-    } else {
-        Ok(string.cast())
-    }
-}
-
-unsafe fn java_byte_array(env: *mut JNIEnv, value: jbyteArray) -> Result<Vec<u8>, String> {
-    if value.is_null() {
-        return Err("Java byte array is null".to_string());
-    }
-    let length = unsafe { ((**env).v1_4.GetArrayLength)(env, value) };
-    unsafe { check(env, "read Java byte array length")? };
-    let mut bytes = vec![0_u8; length as usize];
-    if length > 0 {
-        unsafe {
-            ((**env).v1_4.GetByteArrayRegion)(
-                env,
-                value,
-                0,
-                length,
-                bytes.as_mut_ptr().cast(),
-            )
-        };
-        unsafe { check(env, "read Java byte array")? };
-    }
-    Ok(bytes)
-}
-
-unsafe fn java_string(env: *mut JNIEnv, value: jstring) -> Result<String, String> {
-    if value.is_null() {
-        return Err("Java string is null".to_string());
-    }
-    let length = unsafe { ((**env).v1_4.GetStringLength)(env, value) };
-    let chars = unsafe { ((**env).v1_4.GetStringChars)(env, value, ptr::null_mut()) };
-    unsafe { check(env, "read Java string")? };
-    if chars.is_null() {
-        return Err("Java string characters are null".to_string());
-    }
-    let text =
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(chars, length as usize) });
-    unsafe { ((**env).v1_4.ReleaseStringChars)(env, value, chars) };
-    Ok(text)
-}
-
-unsafe fn check(env: *mut JNIEnv, context: &str) -> Result<(), String> {
-    if !unsafe { ((**env).v1_4.ExceptionCheck)(env) } {
-        return Ok(());
-    }
-    let exception = unsafe { ((**env).v1_4.ExceptionOccurred)(env) };
-    unsafe { ((**env).v1_4.ExceptionClear)(env) };
-    let detail = if exception.is_null() {
-        "unknown Java exception".to_string()
-    } else {
-        unsafe { exception_text(env, exception) }.unwrap_or_else(|_| "Java exception".to_string())
-    };
-    Err(format!("{context}: {detail}"))
-}
-
-unsafe fn exception_text(env: *mut JNIEnv, exception: jobject) -> Result<String, String> {
-    let mut current = exception;
-    let mut details = Vec::new();
-    for _ in 0..6 {
-        if current.is_null() {
-            break;
-        }
-        details.push(unsafe { object_text(env, current)? });
-        current = unsafe { call_object(env, current, "getCause", "()Ljava/lang/Throwable;", &[])? };
-    }
-    Ok(details.join(": caused by "))
-}
-
-unsafe fn throw_runtime(env: *mut JNIEnv, message: &str) {
-    let Ok(class) = (unsafe { find_class(env, "java/lang/RuntimeException") }) else {
-        return;
-    };
-    let message = CString::new(message.replace('\0', " ")).unwrap();
-    unsafe { ((**env).v1_4.ThrowNew)(env, class, message.as_ptr()) };
-}
-
-fn native_method(name: &str, signature: &str, function: *mut c_void) -> JNINativeMethod {
-    JNINativeMethod {
-        name: CString::new(name).unwrap().into_raw(),
-        signature: CString::new(signature).unwrap().into_raw(),
-        fnPtr: function,
-    }
-}
-
-fn object_value(value: jobject) -> jvalue {
-    jvalue { l: value }
-}
-
-fn int_value(value: i32) -> jvalue {
-    jvalue { i: value }
-}
-
-fn bool_value(value: bool) -> jvalue {
-    jvalue { z: value }
 }
 
 fn log(priority: c_int, message: &str) {

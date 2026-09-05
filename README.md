@@ -123,7 +123,7 @@ ID 필드는 응답에서 문자열로 반환됩니다.
 인증 없는 상태 확인입니다.
 
 ```json
-{"ok":true,"service":"noa","version":"1.4.1"}
+{"ok":true,"service":"noa","version":"1.4.2"}
 ```
 
 ### `GET /api/status`
@@ -132,7 +132,7 @@ ID 필드는 응답에서 문자열로 반환됩니다.
 
 ```json
 {
-  "version":"1.4.1",
+  "version":"1.4.2",
   "revision":"<git-commit-sha>",
   "databaseAvailable":true,
   "androidAvailable":true,
@@ -144,7 +144,9 @@ ID 필드는 응답에서 문자열로 반환됩니다.
   "irisHookActive":true,
   "irisEndpointPrefix":"/noa",
   "kakaoHookEnabled":true,
-  "kakaoHookActive":true
+  "kakaoHookActive":true,
+  "voxControlActive":true,
+  "voxAudioActive":true
 }
 ```
 

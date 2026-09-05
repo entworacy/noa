@@ -16,7 +16,8 @@ use tokio::sync::broadcast;
 mod iris;
 #[cfg(any(target_os = "android", test))]
 mod loco;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(not(target_os = "android"), allow(dead_code, unused_imports))]
 mod runtime;
 #[cfg(target_os = "android")]
 pub use runtime::OpenChatJoinResult;
@@ -105,6 +106,20 @@ pub fn active() -> bool {
 
 pub fn kakao_active() -> bool {
     KAKAO_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn vox_control_active() -> bool {
+    #[cfg(target_os = "android")]
+    return runtime::channel_active(noa_agent_protocol::Channel::Vox);
+    #[cfg(not(target_os = "android"))]
+    false
+}
+
+pub fn vox_audio_active() -> bool {
+    #[cfg(target_os = "android")]
+    return runtime::channel_active(noa_agent_protocol::Channel::Audio);
+    #[cfg(not(target_os = "android"))]
+    false
 }
 
 #[cfg(target_os = "android")]
@@ -408,12 +423,12 @@ pub fn launch_chatonroom_rotation(
     });
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn set_active(value: bool) {
     ACTIVE.store(value, Ordering::Release);
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn set_kakao_active(value: bool) {
     KAKAO_ACTIVE.store(value, Ordering::Release);
 }

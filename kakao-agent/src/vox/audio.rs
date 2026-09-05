@@ -174,6 +174,11 @@ pub(crate) fn stop_audio() -> Result<String, String> {
     serialize(&state)
 }
 
+// Keep replace mode active so losing the transport does not expose the microphone.
+pub(crate) fn discard_audio() {
+    audio().queue.clear();
+}
+
 pub(crate) unsafe extern "system" fn process_audio(
     env: *mut JNIEnv,
     _: jclass,
@@ -184,7 +189,7 @@ pub(crate) unsafe extern "system" fn process_audio(
         return;
     }
     let mut state = audio();
-    if !state.active || state.queue.is_empty() {
+    if !state.active {
         return;
     }
     let address = unsafe { ((**env).v1_4.GetDirectBufferAddress)(env, buffer) } as *mut u8;
@@ -193,11 +198,18 @@ pub(crate) unsafe extern "system" fn process_audio(
         return;
     }
     let count = (size as usize).min(capacity as usize);
+    render_frame(&mut state, address, count);
+}
+
+fn render_frame(state: &mut AudioState, address: *mut u8, count: usize) {
+    if !state.active {
+        return;
+    }
     state.processed_frames = state.processed_frames.saturating_add(1);
     state.last_frame_bytes = count;
     match state.mode {
-        AudioMode::Replace => replace(&mut state, address, count),
-        AudioMode::Mix => mix(&mut state, address, count),
+        AudioMode::Replace => replace(state, address, count),
+        AudioMode::Mix => mix(state, address, count),
     }
 }
 
@@ -283,7 +295,8 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{
-        AudioMode, AudioState, MAX_AUDIO_QUEUE_BYTES, mix, replace, start_audio, stop_audio,
+        AudioMode, AudioState, MAX_AUDIO_QUEUE_BYTES, mix, render_frame, replace, start_audio,
+        stop_audio,
     };
 
     #[test]
@@ -321,5 +334,30 @@ mod tests {
         let mut frame = 1_i16.to_le_bytes();
         mix(&mut state, frame.as_mut_ptr(), frame.len());
         assert_eq!(i16::from_le_bytes(frame), i16::MAX);
+    }
+
+    #[test]
+    fn empty_replace_queue_mutes_the_entire_microphone_frame() {
+        let mut state = AudioState {
+            active: true,
+            ..AudioState::default()
+        };
+        let mut frame = [9_u8; 4];
+        render_frame(&mut state, frame.as_mut_ptr(), frame.len());
+        assert_eq!(frame, [0; 4]);
+        assert_eq!(state.underflow_bytes, 4);
+        assert_eq!(state.processed_frames, 1);
+    }
+
+    #[test]
+    fn inactive_or_empty_mix_preserves_microphone_frame() {
+        let mut state = AudioState::default();
+        let mut frame = [9_u8; 4];
+        render_frame(&mut state, frame.as_mut_ptr(), frame.len());
+        assert_eq!(frame, [9; 4]);
+        state.active = true;
+        state.mode = AudioMode::Mix;
+        render_frame(&mut state, frame.as_mut_ptr(), frame.len());
+        assert_eq!(frame, [9; 4]);
     }
 }

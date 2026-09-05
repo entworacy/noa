@@ -7,7 +7,9 @@ use crate::{
 
 mod audio;
 
-pub(crate) use audio::{install_hook, process_audio, push_audio, start_audio, stop_audio};
+pub(crate) use audio::{
+    discard_audio, install_hook, process_audio, push_audio, start_audio, stop_audio,
+};
 
 pub(crate) unsafe fn dispatch_main(
     env: *mut JNIEnv,

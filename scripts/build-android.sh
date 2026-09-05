@@ -233,18 +233,18 @@ build_lsplant_shim() {
   local clang_target="$2"
   local gum="$3"
   local xdl="$4"
-  local root="$project_dir/iris-agent/build/native/$abi"
+  local root="$project_dir/agent-runtime/build/native/$abi"
   local c_compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang"
   local cxx_compiler="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/${clang_target}26-clang++"
   local archiver="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
   local xdl_source="$xdl/xdl/src/main/cpp"
   mkdir -p "$root"
   "$cxx_compiler" -std=c++20 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
-    -I"$project_dir/iris-agent/native" -I"$gum" -I"$xdl_source/include" \
-    -c "$project_dir/iris-agent/native/lsplant_shim.cpp" -o "$root/lsplant_shim.o"
+    -I"$project_dir/agent-runtime/native" -I"$gum" -I"$xdl_source/include" \
+    -c "$project_dir/agent-runtime/native/lsplant_shim.cpp" -o "$root/lsplant_shim.o"
   "$cxx_compiler" -std=c++20 -fPIC -Oz -ffunction-sections -fdata-sections -fvisibility=hidden \
-    -I"$project_dir/iris-agent/native" \
-    -c "$project_dir/iris-agent/native/lsplant_shorty.cpp" -o "$root/lsplant_shorty.o"
+    -I"$project_dir/agent-runtime/native" \
+    -c "$project_dir/agent-runtime/native/lsplant_shorty.cpp" -o "$root/lsplant_shorty.o"
   local objects=("$root/lsplant_shim.o" "$root/lsplant_shorty.o")
   local source
   for source in "$xdl_source"/*.c; do

@@ -138,6 +138,8 @@ struct StatusResponse {
     iris_endpoint_prefix: String,
     kakao_hook_enabled: bool,
     kakao_hook_active: bool,
+    vox_control_active: bool,
+    vox_audio_active: bool,
 }
 
 async fn status(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Responder, NoaError> {
@@ -159,6 +161,8 @@ async fn status(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Res
         iris_endpoint_prefix: state.config.iris_hook.endpoint_prefix.clone(),
         kakao_hook_enabled: state.config.kakao_hook_enabled,
         kakao_hook_active: crate::intercept::kakao_active(),
+        vox_control_active: crate::intercept::vox_control_active(),
+        vox_audio_active: crate::intercept::vox_audio_active(),
     }))
 }
 
@@ -1942,6 +1946,9 @@ mod tests {
         )
         .await;
         assert_eq!(authorized.status(), StatusCode::OK);
+        let status: serde_json::Value = test::read_body_json(authorized).await;
+        assert_eq!(status["voxControlActive"], false);
+        assert_eq!(status["voxAudioActive"], false);
 
         let loco_page = test::call_service(
             &app,

@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "noa"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "actix-multipart",
  "actix-rt",
@@ -1208,6 +1208,7 @@ dependencies = [
  "jni",
  "mime",
  "mime_guess",
+ "noa-agent-protocol",
  "openssl",
  "prost",
  "rusqlite",
@@ -1222,6 +1223,10 @@ dependencies = [
  "url",
  "uuid",
 ]
+
+[[package]]
+name = "noa-agent-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "nu-ansi-term"

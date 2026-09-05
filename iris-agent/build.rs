@@ -22,8 +22,12 @@ fn main() {
         println!("cargo:rerun-if-env-changed={name}");
     }
     assert!(
-        std::path::Path::new(&cxx_runtime).join("libc++_static.a").is_file()
-            && std::path::Path::new(&cxx_runtime).join("libc++abi.a").is_file(),
+        std::path::Path::new(&cxx_runtime)
+            .join("libc++_static.a")
+            .is_file()
+            && std::path::Path::new(&cxx_runtime)
+                .join("libc++abi.a")
+                .is_file(),
         "Android static C++ runtime archives not found in: {cxx_runtime}"
     );
     println!("cargo:rerun-if-env-changed=NOA_CXX_RUNTIME_DIR");
@@ -51,6 +55,7 @@ fn main() {
     println!("cargo:rustc-link-lib=log");
     println!("cargo:rustc-link-lib=dl");
     println!("cargo:rustc-link-lib=m");
-    println!("cargo:rerun-if-changed=native/lsplant_shim.cpp");
-    println!("cargo:rerun-if-changed=native/lsplant_api.hpp");
+    println!("cargo:rerun-if-changed={shim}");
+    println!("cargo:rerun-if-changed={lsplant}");
+    println!("cargo:rerun-if-changed={compiler_runtime}");
 }

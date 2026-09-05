@@ -10,6 +10,9 @@
 /kakao-agent/target
 /iris-agent/build
 /iris-agent/target
+/agent-runtime/build
+/agent-runtime/target
+/agent-protocol/target
 /.noa-device.env
 /.removed-noa-*
 /.idea

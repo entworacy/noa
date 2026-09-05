@@ -1,12 +1,13 @@
 [package]
 name = "noa"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2024"
 license-file = "LICENSE"
 description = "Android-native KakaoTalk room dashboard and media sender"
 build = "build.rs"
 
 [dependencies]
+noa-agent-protocol = { path = "agent-protocol" }
 actix-multipart = "0.7"
 actix-web = "4"
 base64 = "0.22"

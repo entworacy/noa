@@ -118,6 +118,12 @@ pub(crate) enum Operation {
     VoxAudioStop,
 }
 
+impl Request {
+    pub(crate) fn channel(&self) -> Option<noa_agent_protocol::Channel> {
+        noa_agent_protocol::Channel::for_action(&self.action)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OpenChatJoinResult {
