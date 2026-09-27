@@ -45,7 +45,11 @@ void append_values(std::string &message, std::string_view label,
 void *inline_hook(void *target, void *replacement) {
     gpointer original = nullptr;
     gum_interceptor_begin_transaction(interceptor);
+#if defined(__x86_64__)
+    auto result = gum_interceptor_replace_fast(interceptor, target, replacement, &original);
+#else
     auto result = gum_interceptor_replace(interceptor, target, replacement, nullptr, &original);
+#endif
     gum_interceptor_end_transaction(interceptor);
     gum_interceptor_flush(interceptor);
     if (result == GUM_REPLACE_OK) return original;
