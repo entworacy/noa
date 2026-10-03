@@ -4,6 +4,8 @@
 #include <android/dlext.h>
 #include <dlfcn.h>
 #include <frida-gum.h>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,9 @@ std::vector<std::string> unresolved_prefixes;
 size_t xdl_resolutions = 0;
 size_t gum_resolutions = 0;
 size_t inline_hook_failures = 0;
+std::string first_inline_hook_error;
+std::mutex initialization_mutex;
+std::optional<bool> initialization_result;
 bool shorty_fallback_enabled = false;
 
 using Init = bool (*)(JNIEnv *, const lsplant::InitInfo &);
@@ -45,11 +50,23 @@ void append_values(std::string &message, std::string_view label,
 void *inline_hook(void *target, void *replacement) {
     gpointer original = nullptr;
     gum_interceptor_begin_transaction(interceptor);
+#if defined(__x86_64__)
+    auto result = gum_interceptor_replace_fast(interceptor, target, replacement, &original);
+#else
     auto result = gum_interceptor_replace(interceptor, target, replacement, nullptr, &original);
+#endif
+    if (result == GUM_REPLACE_OK && original == nullptr) {
+        gum_interceptor_revert(interceptor, target);
+    }
     gum_interceptor_end_transaction(interceptor);
     gum_interceptor_flush(interceptor);
-    if (result == GUM_REPLACE_OK) return original;
+    if (result == GUM_REPLACE_OK && original != nullptr) return original;
     ++inline_hook_failures;
+    if (first_inline_hook_error.empty()) {
+        first_inline_hook_error = result == GUM_REPLACE_OK
+            ? "Frida Gum returned a null original function"
+            : "Frida Gum replace failed with code " + std::to_string(static_cast<int>(result));
+    }
     return nullptr;
 }
 
@@ -122,12 +139,15 @@ extern "C" void *noa_dlopen_fd(int fd, int flags) {
 }
 
 extern "C" bool noa_lsplant_init(JNIEnv *env, void *handle) {
+    std::lock_guard lock(initialization_mutex);
+    if (initialization_result.has_value()) return *initialization_result;
     last_error.clear();
     unresolved_symbols.clear();
     unresolved_prefixes.clear();
     xdl_resolutions = 0;
     gum_resolutions = 0;
     inline_hook_failures = 0;
+    first_inline_hook_error.clear();
     shorty_fallback_enabled = false;
     auto init = reinterpret_cast<Init>(dlsym(handle, "_ZN7lsplant2v24InitEP7_JNIEnvRKNS0_8InitInfoE"));
     if (init == nullptr) {
@@ -152,9 +172,14 @@ extern "C" bool noa_lsplant_init(JNIEnv *env, void *handle) {
         .art_symbol_resolver = resolve_symbol,
         .art_symbol_prefix_resolver = resolve_prefix,
     };
-    if (init(env, info)) return true;
+    const bool initialized = init(env, info);
+    initialization_result = initialized && inline_hook_failures == 0;
+    if (*initialization_result) return true;
 
-    last_error = "LSPlant Init returned false; symbol resolver=";
+    last_error = initialized
+        ? "LSPlant Init returned true with incomplete inline hooks"
+        : "LSPlant Init returned false";
+    last_error.append("; symbol resolver=");
     last_error.append(art_xdl == nullptr ? "Frida-only" : "xDL+Frida");
     last_error.append("; resolved(xDL=").append(std::to_string(xdl_resolutions));
     last_error.append(", Frida=").append(std::to_string(gum_resolutions)).append(")");
@@ -162,6 +187,7 @@ extern "C" bool noa_lsplant_init(JNIEnv *env, void *handle) {
     append_values(last_error, "unresolved prefixes", unresolved_prefixes);
     if (inline_hook_failures != 0) {
         last_error.append("; inline hook failures=").append(std::to_string(inline_hook_failures));
+        last_error.append("; first inline hook error=").append(first_inline_hook_error);
     }
     return false;
 }
