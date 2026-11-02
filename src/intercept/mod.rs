@@ -462,3 +462,21 @@ mod tests {
         assert!(retry.ready());
     }
 }
+
+pub async fn send_loco(
+    request: noa_agent_protocol::loco::SendLocoRequest,
+) -> Result<serde_json::Value, crate::failure::NoaError> {
+    request
+        .validate()
+        .map_err(crate::failure::NoaError::BadRequest)?;
+    #[cfg(target_os = "android")]
+    {
+        runtime::send_loco(request).await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err(crate::failure::NoaError::AndroidUnavailable(
+            "LOCO 송신은 Android에서만 지원합니다".into(),
+        ))
+    }
+}

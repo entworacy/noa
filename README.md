@@ -1,76 +1,118 @@
-# noa
+# Noa
 
 <p align="center">
-  <img src="assets/noa-cover.jpg" alt="Noa KakaoTalk illustration" width="480">
+  <img src="assets/noa-cover.jpg" alt="Noa 프로젝트 커버" width="480">
 </p>
 
-Noa는 루팅된 Android 또는 Redroid에서 KakaoTalk 조회·전송·오픈채팅 관리·이벤트 감사를 제공하는 네이티브 서비스입니다. ARM64, ARMv7, x86, x86_64를 지원합니다.
+**루팅된 Android에서 실행하는 카카오톡 관리 서비스**
 
-> **주의:** 내부 데이터베이스, 비공개 API와 프로세스 후킹을 사용합니다. 소유·관리 권한이 있는 테스트 환경에서만 사용하고 관련 법령과 KakaoTalk 정책을 준수하십시오. Noa는 Kakao의 공식 제품이 아니며 어떠한 보증도 제공하지 않습니다. 소스·바이너리 재배포는 금지되며 자세한 조건은 [Noa License 1.0](LICENSE)을 따릅니다.
+Noa는 로그인된 카카오톡의 채팅방·참여자 조회, 메시지 전송, 오픈채팅 관리 기능을 HTTP API와 웹 대시보드로 제공합니다. Android 기기와 Redroid에서 실행하며, Iris를 통한 봇 연동도 지원합니다.
 
-## 라이선스 및 문의
+[빠른 시작](#빠른-시작) · [API 레퍼런스](docs/6-api.md) · [문서](#문서) · [라이선스](#라이선스)
 
-- 제작자·저작권자: Entworacy
-- 이메일: [entworacy@gmail.com](mailto:entworacy@gmail.com)
-- 라이선스: [Noa License 1.0](LICENSE)
+## 주요 기능
 
-개인·조직 내부 사용과 사적 수정은 허용되지만, 저작권자의 사전 서면 허가 없이 다음 행위를 할 수 없습니다.
-
-- 소스·바이너리·수정본 재배포
-- Noa 실행 바이너리 자체를 다른 프로젝트·제품·설치 파일·패키지에 포함하여 제3자에게 배포
-- 소프트웨어 또는 그 사본의 유상 판매·재판매·대여·유상 설치
-
-제3자 구성 요소와 상호운용 참고 사항은 [NOTICE](NOTICE)와 [licenses](licenses)를 확인하십시오.
+- **조회 및 이벤트**: 채팅방·참여자·프로필 조회, 입장·퇴장·강퇴·닉네임 변경 기록, SSE 구독
+- **메시지 전송**: 텍스트·이미지·파일 전송, Markdown → RichText 변환, custom 메시지 재전송
+- **오픈채팅 관리**: 입장·나가기, 참여자 강퇴, 메시지 가리기, 프로필 공유 URL 조회
+- **LOCO**: 송수신 패킷 조회와 기존 앱 연결을 통한 직접 발신
+- **VOX**: 보이스톡·보이스룸 제어, PCM 오디오 송출
+- **Iris 연동**: `/reply` 확장, `/noa` API 게이트웨이, Python 클라이언트 지원
 
 ## 지원 환경
 
-| 항목 | 내용 |
-|---|---|
-| 최적화·검증 기준 | KakaoTalk Android `26.6.3` |
-| 실행 환경 | Android API 26 이상, root 권한 필요 |
-| 기본 동작 | `KAKAO_HOOK_ENABLED=true` |
-| 후킹 방식 | Frida Core + LSPlant |
-| 비후킹 모드 | Android Intent + UiAutomator |
+카카오톡 Android `26.9.1`에 최적화되어 있습니다.
 
-다른 KakaoTalk 버전은 호환성을 보장하지 않습니다. 세부 사항은 [후킹 및 접근성 에이전트](docs/4-agents.md)를 참고하십시오.
+| 항목 | 지원 범위 |
+| --- | --- |
+| 운영체제 | Android API 26 이상, root 권한 필요 |
+| 실행 환경 | Android 기기 또는 Redroid |
+| 아키텍처 | ARM64, ARMv7, x86, x86_64 |
+| 기본 실행 모드 | Frida Core + LSPlant 후킹 (`KAKAO_HOOK_ENABLED=true`) |
+| 비후킹 모드 | Android Intent + UiAutomator를 통한 일부 기능 지원 |
 
-## 구조
+Noa는 카카오의 공식 제품이 아닙니다. 카카오톡 내부 DB와 비공개 API를 사용하므로 앱 업데이트에 따라 호환성 수정이 필요할 수 있습니다. 기능별 실행 경로는 [에이전트 문서](docs/4-agents.md)에 정리되어 있습니다.
 
-Noa는 KakaoTalk DB, Android Intent, 네이티브 후킹과 UiAutomator를 기능별로 사용합니다.
+## 빠른 시작
 
-1. [전체 구조와 실행 흐름](docs/1-architecture.md)
-2. [데이터 관찰과 이벤트 처리](docs/2-data-and-events.md)
-3. [메시지·파일 전송 원리](docs/3-delivery.md)
-4. [후킹 및 접근성 에이전트](docs/4-agents.md)
+### 준비 사항
 
-## 설치
+- root 권한을 사용할 수 있고 카카오톡에 로그인된 Android 기기 또는 Redroid
+- 기기에 ADB로 연결할 수 있는 Linux 호스트
+- `git`, `adb`, `bash`, `curl`, `python3`, `sha256sum` 및 기본 Unix 도구
 
-사전 요구 사항:
-
-- Android API 26 이상
-- ADB로 연결할 수 있는 Linux 환경
-- `bash`, `curl`, `python3`, `sha256sum`
+### 설치 및 실행
 
 ```bash
 git clone --depth 1 https://github.com/entworacy/noa.git
 cd noa
+
 adb connect 127.0.0.1:5555
 ./scripts/iris-noa install --serial 127.0.0.1:5555
 ./scripts/iris-noa up
 ```
 
-ADB 주소는 환경에 맞게 변경합니다. `--iris-control PATH`로 기존 `iris_control`을 지정할 수 있습니다. 설치 설정과 API 토큰은 `.noa-device.env`에 저장됩니다.
+`127.0.0.1:5555`는 예시 ADB 주소입니다. 실제 기기 주소 또는 ADB 시리얼로 변경합니다.
+
+설치 스크립트는 공개된 최신 릴리스에서 기기 아키텍처에 맞는 Noa 바이너리와 체크섬을 내려받습니다. Iris가 없으면 함께 설치하고, 기존 Iris 설치가 있으면 사용합니다. 설치 설정과 자동 생성된 API 토큰은 `.noa-device.env`에 저장됩니다.
+
+필요에 따라 설치 옵션을 지정할 수 있습니다.
+
+| 옵션 | 용도 |
+| --- | --- |
+| `--release-version VERSION` | 설치할 공개 릴리스 버전 지정 |
+| `--noa-binary PATH` | 로컬 실행 파일 설치 |
+| `--iris-control PATH` | 기존 `iris_control` 스크립트 사용 |
+| `--api-token TOKEN` | 자동 생성 대신 지정한 API 토큰 사용 |
+| `--kakao-hook-enabled false` | 비후킹 모드 사용 |
+
+`--release-version`과 `--noa-binary`는 함께 사용할 수 없습니다. 전체 옵션은 `./scripts/iris-noa --help`로 확인합니다.
+
+### 접속 및 상태 확인
+
+기본 설정에서 다음 주소로 접속합니다.
+
+| 서비스 | 주소 |
+| --- | --- |
+| Noa 대시보드 | `http://127.0.0.1:4000/` |
+| LOCO 패킷 뷰어 | `http://127.0.0.1:4000/loco` |
+| Noa HTTP API | `http://127.0.0.1:4000` |
+| Iris | `http://127.0.0.1:3000` |
 
 ```bash
+curl http://127.0.0.1:4000/health
+
 ./scripts/iris-noa status
 ./scripts/iris-noa stop
 ```
 
-기본 주소는 Noa `http://127.0.0.1:4000`, Iris `http://127.0.0.1:3000`입니다.
+## 사용 예시
 
-## Python 클라이언트
+Noa API는 설치 시 생성된 토큰으로 인증합니다. 아래 `API_TOKEN`을 실제 토큰으로 바꿉니다.
 
-Python 3.10 이상에서 [`irispy-noa-client`](https://github.com/entworacy/irispy-noa-client)를 사용합니다.
+채팅방 목록 조회:
+
+```bash
+curl http://127.0.0.1:4000/api/rooms \
+  -H 'Authorization: Bearer API_TOKEN'
+```
+
+텍스트 메시지 전송:
+
+```bash
+curl -X POST http://127.0.0.1:4000/send/text \
+  -H 'Authorization: Bearer API_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{"chatId":"123456789","text":"안녕하세요"}'
+```
+
+`chatId`는 조회한 채팅방 ID로 지정합니다. 텍스트·파일 전송의 성공 응답은 Android Intent 실행 완료를 나타냅니다. 실제 메시지 수신 여부와는 구분됩니다.
+
+API별 요청 형식, 완료 기준, 오류 응답은 [API 레퍼런스](docs/6-api.md)에 정리되어 있습니다.
+
+### Python 클라이언트
+
+Python 3.10 이상에서는 [irispy-noa-client](https://github.com/entworacy/irispy-noa-client)를 사용할 수 있습니다. 기존 `irispy-client`가 설치되어 있다면 먼저 제거합니다.
 
 ```bash
 pip uninstall -y irispy-client
@@ -87,505 +129,67 @@ bot = Bot(
 )
 ```
 
-Iris `/noa/...` 요청에는 에이전트가 내부 인증을 추가합니다.
+Iris의 `/noa/...` 요청에는 에이전트가 내부 인증을 추가합니다. 지원 엔드포인트는 [Iris API](docs/6-api.md#iris-api)를 참고합니다.
 
-## API 공통 규칙
+## 설정
 
-기본 URL은 `http://127.0.0.1:4000`입니다. `/health`, `/`, `/dashboard`, `/loco` 외 공개 API는 다음 헤더로 인증합니다.
-
-```http
-Authorization: Bearer API_TOKEN
-X-Noa-Token: API_TOKEN
-```
-
-JSON 요청은 `Content-Type: application/json`, 오류 응답은 다음 형식입니다.
-
-```json
-{"error":"오류 설명"}
-```
-
-| 상태 | 의미 |
-|---:|---|
-| `400` | 요청 형식 또는 값 오류 |
-| `401` | 인증 실패 |
-| `403` | 작업 권한 없음 또는 카카오 서버의 작업 거부 |
-| `404` | 대상 또는 기능을 찾을 수 없음 |
-| `409` | VOX 세션 종료 또는 대상 세션 변경 |
-| `503` | Android/에이전트 기능을 사용할 수 없음 |
-| `500` | 데이터베이스 또는 내부 처리 오류 |
-
-ID 필드는 응답에서 문자열로 반환됩니다.
-
-## 상태 및 조회 API
-
-### `GET /health`
-
-인증 없는 상태 확인입니다.
-
-```json
-{"ok":true,"service":"noa","version":"1.4.3"}
-```
-
-### `GET /api/status`
-
-서버와 KakaoTalk 연동 상태입니다.
-
-```json
-{
-  "version":"1.4.3",
-  "revision":"<git-commit-sha>",
-  "databaseAvailable":true,
-  "androidAvailable":true,
-  "authenticationEnabled":true,
-  "roomCount":3,
-  "currentUserId":"123456789",
-  "maxUploadBytes":67108864,
-  "irisHookEnabled":true,
-  "irisHookActive":true,
-  "irisEndpointPrefix":"/noa",
-  "kakaoHookEnabled":true,
-  "kakaoHookActive":true,
-  "voxControlActive":true,
-  "voxAudioActive":true
-}
-```
-
-`Enabled`는 설정, `Active`는 에이전트 연결 상태입니다.
-`androidAvailable`은 별도 프로세스의 ART 사전 검사를 통과한 뒤 JNI 전송 계층까지
-준비됐는지를 나타냅니다. ART 사전 검사 프로세스가 충돌하거나 15초 안에 끝나지
-않으면 Noa 서버와 후킹 기능은 제한 모드로 계속 실행되고 이 값만 `false`가 됩니다.
-초기화 단계는 `/data/local/tmp/noa.log`의 `stage` 필드에서 확인할 수 있습니다.
-
-### `GET /api/rooms`
-
-참여 중인 채팅방 목록입니다.
-
-```json
-[
-  {
-    "chatId":"123456789",
-    "name":"테스트 방",
-    "roomType":"OM",
-    "memberCount":2,
-    "members":[
-      {
-        "userId":"111",
-        "nickname":"사용자",
-        "profileImageUrl":null,
-        "isMine":false
-      }
-    ]
-  }
-]
-```
-
-### `GET /api/rooms/{chatId}`
-
-Room 한 건을 반환하며, 없으면 `404`입니다.
-
-### `GET /api/events`
-
-참여자 이벤트를 최신순으로 반환합니다.
-
-| Query | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `chatId` | integer string | 아니요 | 특정 방만 조회 |
-| `userId` | positive integer string | 아니요 | 특정 사용자 조회. `chatId` 필요 |
-| `limit` | integer | 아니요 | 기본 `200`, 실제 범위 `1..1000` |
-
-```json
-[
-  {
-    "id":1,
-    "chatId":"123456789",
-    "roomName":"테스트 방",
-    "kind":"joined",
-    "userId":"111",
-    "nickname":"사용자",
-    "previousNickname":null,
-    "occurredAt":1720000000,
-    "source":"feed"
-  }
-]
-```
-
-`kind`는 `joined`, `left`, `kicked`, `nickname_changed` 중 하나입니다.
-
-### `GET /api/events/stream`
-
-새 RoomEvent를 SSE로 전달합니다.
-
-```text
-: connected
-
-data: {"id":2,"chatId":"123456789","roomName":"테스트 방","kind":"left","userId":"111","nickname":"사용자","previousNickname":null,"occurredAt":1720000010,"source":"snapshot"}
-
-```
-
-### `GET /api/loco?limit=500`
-
-최근 LOCO 패킷을 반환합니다. `limit` 기본값은 `500`, 범위는 `1..10000`입니다.
-
-```json
-[
-  {
-    "id":1,
-    "direction":"receive",
-    "method":"MSG",
-    "packetId":10,
-    "status":0,
-    "bodyLength":128,
-    "body":"{...}",
-    "capturedAt":1720000000000
-  }
-]
-```
-
-## 전송 API
-
-### `POST /send`
-
-파일 전송 API입니다. 최대 크기는 `NOA_MAX_UPLOAD_BYTES`입니다.
-
-Multipart 요청:
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `chatId` 또는 `chat_id` | integer string | 예 | 대상 방 |
-| `file` 또는 `data` | binary | 예 | 파일 하나 |
-
-```bash
-curl -X POST http://127.0.0.1:4000/send \
-  -H 'Authorization: Bearer API_TOKEN' \
-  -F 'chatId=123456789' \
-  -F 'file=@photo.png'
-```
-
-원시 바이너리는 `POST /send?chatId=123456789&filename=photo.png`로 보내며 파일명은 `filename` query 또는 `X-Filename` 헤더로 지정합니다.
-
-```json
-{
-  "ok":true,
-  "chatId":"123456789",
-  "file":{
-    "fileName":"photo.png",
-    "mimeType":"image/png",
-    "originalBytes":1024,
-    "storedBytes":1024,
-    "optimized":false
-  },
-  "message":"KakaoTalk 공유 Intent를 실행했습니다"
-}
-```
-
-### `POST /send/text`
-
-`threadId`는 생략하거나 `null`로 지정할 수 있습니다.
-
-```json
-{"chatId":"123456789","text":"안녕하세요","threadId":null}
-```
-
-```json
-{"ok":true,"chatId":"123456789","message":"KakaoTalk 답장 Intent를 실행했습니다"}
-```
-
-## 오픈채팅 및 방 관리 API
-
-### `GET /api/open-chat/profiles`
-
-사용 가능한 소유 프로필 목록입니다.
-
-```json
-{
-  "ok":true,
-  "profiles":[
-    {
-      "profileId":"700",
-      "nickname":"선택 프로필",
-      "profileImageUrl":null,
-      "kind":"openProfile",
-      "isMain":false
-    }
-  ]
-}
-```
-
-`kind`는 `kakao` 또는 `openProfile`입니다.
-
-### `POST /api/open-chat/profiles/share`
-
-소유 오픈프로필의 공유 URL입니다. `mode`: `auto`(기본값), `hook`, `accessibility`.
-
-```json
-{"linkId":"700","mode":"auto"}
-```
-
-```json
-{
-  "ok":true,
-  "linkId":"700",
-  "url":"https://open.kakao.com/o/PROFILE_TOKEN",
-  "mode":"hook",
-  "verified":true,
-  "verification":"database+hook"
-}
-```
-
-### `POST /api/open-chat/profiles/share-member`
-
-방 참여자의 오픈프로필 공유 URL입니다.
-
-```json
-{"chatId":"123456789","userId":"111","mode":"accessibility"}
-```
-
-```json
-{
-  "ok":true,
-  "chatId":"123456789",
-  "userId":"111",
-  "linkId":null,
-  "url":"https://open.kakao.com/me/PROFILE_TOKEN",
-  "mode":"accessibility",
-  "verified":true,
-  "verification":"database-member+ui+clipboard"
-}
-```
-
-### `POST /api/open-chat/join`
-
-오픈채팅에 입장합니다. `profileId`를 생략하면 첫 소유 프로필을 사용합니다.
-
-```json
-{"url":"https://open.kakao.com/o/OPEN_CHAT_ID","profileId":"700"}
-```
-
-```json
-{
-  "ok":true,
-  "roomName":"오픈채팅방",
-  "profileId":"700",
-  "profile":"선택 프로필",
-  "profileApplied":true,
-  "mode":"hook",
-  "message":"오픈채팅 입장을 완료했습니다"
-}
-```
-
-### `POST /api/rooms/{chatId}/kick`
-
-`nickname` 또는 `userId`로 참여자를 강퇴합니다. 자기 자신은 대상이 될 수 없습니다.
-카카오 서버가 권한이나 대상 역할 때문에 요청을 거부하면 `403`과 KICKMEM 응답의 `status`, `errMsg`를 반환합니다.
-
-```json
-{"userId":"111"}
-```
-
-```json
-{
-  "ok":true,
-  "verified":true,
-  "verification":"database",
-  "chatId":"123456789",
-  "roomName":"오픈채팅방",
-  "userId":"111",
-  "nickname":"사용자",
-  "message":"참여자 강퇴를 완료했습니다"
-}
-```
-
-### `POST /api/rooms/{chatId}/leave`
-
-요청 본문 없이 방에서 나갑니다.
-
-```json
-{
-  "ok":true,
-  "chatId":"123456789",
-  "roomName":"오픈채팅방",
-  "message":"채팅방 나가기를 완료했습니다"
-}
-```
-
-### `POST /api/rooms/{chatId}/messages/{logId}/hide`
-
-오픈채팅 방장이 지정한 메시지를 모든 참여자에게서 가립니다. 요청 본문은 없으며
-KakaoTalk 후킹 모드가 필요합니다. 응답의 `accepted`는 KakaoTalk가 내부 요청을
-수락했다는 뜻이며, 서버 반영 완료를 보장하는 값은 아닙니다.
-
-```json
-{
-  "ok":true,
-  "accepted":true,
-  "verified":false,
-  "verification":"kakao-dispatch",
-  "chatId":"123456789",
-  "logId":"987654321",
-  "message":"메시지 가리기 요청을 KakaoTalk에 전달했습니다"
-}
-```
-
-## VOX 보이스톡 및 PCM 송출 API
-
-VOX API는 `KAKAO_HOOK_ENABLED=true`와 `RECORD_AUDIO` 권한이 필요합니다.
-
-### 일반 보이스톡
-
-`peerIds`를 생략하면 현재 사용자를 제외한 활성 참여자 전체에 보이스톡을 겁니다.
-
-```bash
-curl -X POST http://127.0.0.1:4000/api/vox/voice-talk \
-  -H 'Authorization: Bearer API_TOKEN' \
-  -H 'Content-Type: application/json' \
-  -d '{"chatId":"123456789","peerIds":["111"]}'
-```
-
-### 오픈채팅 보이스룸
-
-`POST /api/vox/voice-rooms`는 OpenMulti(`OM`) 방에 보이스룸을 만듭니다.
-
-```json
-{"chatId":"123456789","title":"방송"}
-```
-
-참여는 `POST /api/vox/voice-rooms/join`에 `chatId`를 보냅니다.
-
-```json
-{"chatId":"123456789"}
-```
-
-종료:
-
-```json
-{"chatId":"123456789","kind":"cecall"}
-```
-
-`kind`: `cecall` 또는 `voiceroom`. 상태 조회: `GET /api/vox/status`.
-
-### PCM 음원 송출
-
-입력: header 없는 `s16le`, 48 kHz, mono. 모드: `replace` 또는 `mix`.
-
-```bash
-ffmpeg -i music.mp3 -f s16le -ar 48000 -ac 1 - \
-  | curl --http1.1 -X POST --upload-file - \
-      'http://127.0.0.1:4000/api/vox/audio/stream?mode=replace&kind=voiceroom&chatId=123456789' \
-      -H 'Authorization: Bearer API_TOKEN' \
-      -H 'Content-Type: application/octet-stream'
-```
-
-Noa가 입력을 96,000 bytes/s로 pacing하며 VOX 세션을 250ms 간격으로 확인합니다. 대상 세션이 종료되거나 다른 방으로 바뀌면 PCM 주입을 중지하고 HTTP `409`를 반환합니다. `kind`는 `cecall` 또는 `voiceroom`이며 `chatId`와 함께 지정할 수 있습니다. 단일 `/api/vox/audio` 요청은 최대 96,000바이트의 완전한 16-bit sample이어야 합니다.
-
-## Iris API
-
-`file`, `markdown`, `custom`은 Iris `POST /reply`로 전송합니다.
-
-### Iris `POST /reply`
-
-지원 타입은 `NOA_IRIS_HOOK_TYPES`로 제한됩니다.
-
-Markdown:
-
-```json
-{"type":"markdown","room":"123456789","data":"**굵은 메시지**"}
-```
-
-파일(Android 경로 또는 Base64/Data URI):
-
-```json
-{"type":"file","room":"123456789","path":"/sdcard/Download/report.pdf"}
-```
-
-```json
-{"type":"file","room":"123456789","data":"data:application/pdf;name=report.pdf;base64,..."}
-```
-
-Custom:
-
-```json
-{
-  "type":"custom",
-  "room":"123456789",
-  "data":{
-    "type":1,
-    "message":"메시지",
-    "attachment":{},
-    "chat_id":"123456789",
-    "thread_id":null,
-    "scope":1,
-    "v":null,
-    "is_silence":0
-  }
-}
-```
-
-`data.type`: `1..65535`. `data.chat_id`는 `room`과 같아야 합니다.
-
-`file`과 `markdown` 성공 응답:
-
-```json
-{"success":true,"message":"success"}
-```
-
-`custom` 성공 응답:
-
-```json
-{
-  "success":true,
-  "message":"success",
-  "verified":true,
-  "verification":"database",
-  "chatId":"123456789",
-  "rowId":10,
-  "clientMessageId":20
-}
-```
-
-### Iris 확장 엔드포인트
-
-기본 prefix는 `http://127.0.0.1:3000/noa`이며 `NOA_IRIS_ENDPOINT_PREFIX`로 변경합니다.
-
-| 메서드 | 경로 | Noa API 대응 |
-|---|---|---|
-| `GET` | `/noa/health` | 확장 게이트웨이 상태 |
-| `GET` | `/noa/open-chat/profiles` | `GET /api/open-chat/profiles` |
-| `POST` | `/noa/open-chat/profiles/share` | `POST /api/open-chat/profiles/share` |
-| `POST` | `/noa/open-chat/profiles/share-member` | `POST /api/open-chat/profiles/share-member` |
-| `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
-| `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
-| `POST` | `/noa/rooms/{chatId}/messages/{logId}/hide` | `POST /api/rooms/{chatId}/messages/{logId}/hide` |
-| `POST` | `/noa/rooms/{chatId}/leave` | `POST /api/rooms/{chatId}/leave` |
-| `GET` | `/noa/vox/status` | `GET /api/vox/status` |
-| `POST` | `/noa/vox/voice-talk` | `POST /api/vox/voice-talk` |
-| `POST` | `/noa/vox/voice-rooms` | `POST /api/vox/voice-rooms` |
-| `POST` | `/noa/vox/voice-rooms/join` | `POST /api/vox/voice-rooms/join` |
-| `POST` | `/noa/vox/leave` | `POST /api/vox/leave` |
-| `POST` | `/noa/vox/audio/start` | `POST /api/vox/audio/start` |
-| `POST` | `/noa/vox/audio` | `POST /api/vox/audio` |
-| `POST` | `/noa/vox/audio/stream` | `POST /api/vox/audio/stream` |
-| `POST` | `/noa/vox/audio/stop` | `POST /api/vox/audio/stop` |
-
-본문은 대응하는 Noa API와 동일하며 Iris가 내부 인증을 추가합니다.
-PCM 본문도 `application/octet-stream` 그대로 전송하며 Base64 변환은 내부 브리지에서만 수행합니다. Iris의 Ktor gateway는 요청 본문을 전달 전에 메모리에 모으므로 장시간 실시간 입력은 `/noa/vox/audio`에 작은 PCM 청크를 순차 전송하거나 Noa의 `/api/vox/audio/stream`을 직접 사용하십시오.
-
-## 주요 환경변수
+다음은 Android에서 Noa 서버를 실행할 때 사용하는 주요 환경변수입니다. 설치 스크립트의 `up` 명령은 `.noa-device.env`의 저장된 설정을 사용합니다.
 
 | 변수 | 기본값 | 설명 |
-|---|---|---|
-| `NOA_BIND` | `0.0.0.0:4000` | Noa HTTP 바인딩 주소 |
-| `NOA_API_TOKEN` | 설치 시 자동 생성 | 공개 Noa API 인증 토큰 |
-| `NOA_IRIS_HOOK` | `false` | Iris 네이티브 브리지 활성화 |
-| `NOA_IRIS_HOOK_TYPES` | `file,markdown,custom` | Iris `/reply` 처리 타입 |
-| `NOA_IRIS_ENDPOINT_PREFIX` | `/noa` | Iris 확장 API prefix |
-| `KAKAO_HOOK_ENABLED` | `true` | Kakao 네이티브 작업 사용 여부 |
-| `NOA_DATA_DIR` | `/data/local/tmp/noa` | 감사 DB와 설정 저장 경로 |
-| `NOA_UPLOAD_DIR` | KakaoTalk 외부 파일 경로 | 임시 업로드 저장 경로 |
-| `NOA_KAKAO_PATH` | 자동 탐색 | KakaoTalk 앱 데이터 경로 |
+| --- | --- | --- |
+| `NOA_BIND` | `0.0.0.0:4000` | HTTP 수신 주소 |
+| `NOA_API_TOKEN` | 없음 · 설치 스크립트에서 자동 생성 | 공개 API 인증 토큰 |
+| `NOA_IRIS_HOOK` | `false` · `iris-noa up`에서 활성화 | Iris 네이티브 브리지 사용 |
+| `NOA_IRIS_HOOK_TYPES` | `file,markdown,custom` | Iris `/reply` 확장 타입 |
+| `NOA_IRIS_ENDPOINT_PREFIX` | `/noa` | Iris 확장 API 경로 접두사 |
+| `KAKAO_HOOK_ENABLED` | `true` | 카카오톡 네이티브 작업 사용 |
+| `NOA_DATA_DIR` | `/data/local/tmp/noa` | 감사 DB 및 설정 저장 경로 |
+| `NOA_UPLOAD_DIR` | `/sdcard/Android/data/com.kakao.talk/files/noa/uploads` | 임시 업로드 경로 |
+| `NOA_KAKAO_PATH` | 자동 탐색 | 카카오톡 앱 데이터 경로 |
 | `NOA_ANDROID_USER` | `0` | Android 사용자 ID |
-| `NOA_MAX_UPLOAD_BYTES` | `67108864` | 요청 파일 최대 바이트 |
-| `NOA_POLL_INTERVAL_MS` | `30000` | 이벤트 feed 안전 폴링 주기 |
-| `NOA_SNAPSHOT_INTERVAL_MS` | `60000` | 방 스냅샷 안전 갱신 주기 |
-| `NOA_SEND_INTERVAL_MS` | `300` | 전송 간격 |
-| `NOA_IMAGE_MAX_DIMENSION` | `4096` | 이미지 최대 가로·세로 크기 |
-| `NOA_JPEG_QUALITY` | `85` | JPEG 품질 (`50..95`) |
+| `NOA_MAX_UPLOAD_BYTES` | `67108864` | 업로드 최대 크기 · 바이트 |
+| `NOA_POLL_INTERVAL_MS` | `30000` | 이벤트 보완 폴링 주기 · ms |
+| `NOA_SNAPSHOT_INTERVAL_MS` | `60000` | 채팅방 스냅샷 갱신 주기 · ms |
+| `NOA_SEND_INTERVAL_MS` | `300` | 전송 큐의 처리 간격 · ms |
+| `NOA_IMAGE_MAX_DIMENSION` | `4096` | 이미지 최대 가로·세로 크기 · px |
+| `NOA_JPEG_QUALITY` | `85` | JPEG 품질 · `50..95` |
+
+서버를 직접 실행할 때 `NOA_API_TOKEN`을 지정하지 않으면 공개 API 인증이 비활성화됩니다. 전체 설정과 기본값은 [환경변수 목록](docs/1-architecture.md#전체-환경변수)을 참고합니다.
+
+## 문제 해결
+
+| 증상 | 확인할 사항 |
+| --- | --- |
+| API가 `401`을 반환함 | 설치 시 발급된 토큰과 `Authorization` 헤더 확인 |
+| 릴리스 다운로드 실패 | 공개 릴리스의 바이너리·체크섬 존재 여부 확인 |
+| `databaseAvailable: false` | root 권한, 카카오톡 로그인 상태, 앱 데이터 경로 확인 |
+| `androidAvailable: false` | `/data/local/tmp/noa.log`의 ART 사전 검사 및 JNI 초기화 로그 확인 |
+| `kakaoHookActive: false` | 후킹 설정과 대상 카카오톡 버전, 에이전트 초기화 로그 확인 |
+| LOCO client를 찾지 못함 | 후킹 이후 앱에서 정상 송신이 발생했는지 확인 |
+
+연동 상태는 `GET /api/status`, 프로세스 상태는 `./scripts/iris-noa status`로 확인합니다. 로그는 Android 기기의 `/data/local/tmp/noa.log`에 기록됩니다.
+
+## 문서
+
+| 문서 | 내용 |
+| --- | --- |
+| [아키텍처](docs/1-architecture.md) | 구성 요소, 시작 순서, 인증, 전체 환경변수 |
+| [데이터와 이벤트](docs/2-data-and-events.md) | DB 관찰, 이벤트 생성 및 감사 기록 |
+| [메시지 전송](docs/3-delivery.md) | Intent, RichText, 파일, custom 전송 경로 |
+| [에이전트](docs/4-agents.md) | 후킹·접근성 모드, LOCO, VOX 내부 구조 |
+| [API 레퍼런스](docs/6-api.md) | Noa 및 Iris 요청·응답 명세 |
+| [Iris 호환성](docs/7-iris-compatibility.md) | Iris 버전별 연동 점검 결과와 확인 범위 |
+
+## 버그 보고 및 문의
+
+버그와 기능 제안은 [GitHub Issues](https://github.com/entworacy/noa/issues)에서 받습니다. 버그 보고에는 Noa 버전 또는 커밋, 카카오톡·Android 버전, 기기 ABI, 재현 절차, 토큰과 개인정보를 제거한 관련 로그를 포함합니다.
+
+기타 문의: [entworacy@gmail.com](mailto:entworacy@gmail.com)
+
+## 라이선스
+
+Copyright © 2026 Entworacy. [Noa License 1.0](LICENSE)이 적용됩니다.
+
+개인·조직 내부 사용과 사적 수정은 허용됩니다. 소스·바이너리·수정본 재배포, 다른 제품에 Noa 바이너리를 포함한 배포, 소프트웨어 사본의 판매·대여·유상 설치에는 저작권자의 사전 서면 허가가 필요합니다. 자세한 허용 범위와 보증·책임 조건은 라이선스 전문을 따릅니다.
+
+제3자 구성 요소의 고지와 라이선스는 [NOTICE](NOTICE) 및 [licenses/](licenses)에 정리되어 있습니다.

@@ -1,4 +1,11 @@
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        let placeholder =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("empty-lsplant.so");
+        std::fs::write(&placeholder, []).unwrap();
+        println!("cargo:rustc-env=NOA_LSPLANT_BLOB={}", placeholder.display());
+        return;
+    }
     let gum = std::env::var("NOA_FRIDA_GUM_DEVKIT")
         .expect("NOA_FRIDA_GUM_DEVKIT must point to a Frida Gum Android devkit");
     let shim = std::env::var("NOA_LSPLANT_SHIM")

@@ -50,10 +50,12 @@ pub(crate) struct Request {
     kind: Option<String>,
     mode: Option<String>,
     audio: Option<String>,
+    packet: Option<noa_agent_protocol::loco::SendLocoRequest>,
 }
 
 #[derive(Clone)]
 pub(crate) enum Operation {
+    SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     Send {
         room: i64,
         row: i64,
@@ -158,6 +160,9 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         Err(error) => return (id, Err(error)),
     };
     let result = match &active.state.operation {
+        Operation::SendLoco(packet) => {
+            with_env(|env| unsafe { packets::send_loco(env, packet) }).map(Some)
+        }
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
         Operation::HideMessage { .. } => execute_main(id, &active.state, ACTION_HIDE_MESSAGE),
@@ -182,6 +187,11 @@ impl TryFrom<Request> for Operation {
 
     fn try_from(request: Request) -> Result<Self, Self::Error> {
         match request.action.as_str() {
+            "send-loco" => {
+                let packet = request.packet.ok_or("packet is required")?;
+                packet.validate()?;
+                Ok(Self::SendLoco(packet))
+            }
             "send-custom" => match (request.room, request.row) {
                 (Some(room), Some(row)) => Ok(Self::Send { room, row }),
                 _ => Err("room and row are required".to_string()),
@@ -678,6 +688,32 @@ mod tests {
             invalid_vox_host.err().as_deref(),
             Some("a VOX host is required")
         );
+    }
+
+    #[test]
+    fn loco_command_requires_validated_document() {
+        let make = |packet| {
+            request(
+                serde_json::json!({"token":"test","id":99,"action":"send-loco","packet":packet}),
+            )
+        };
+        let request = make(serde_json::json!({"method":"PING","body":{}}));
+        assert_eq!(
+            request.channel(),
+            Some(noa_agent_protocol::Channel::Control)
+        );
+        assert!(matches!(
+            Operation::try_from(request),
+            Ok(Operation::SendLoco(_))
+        ));
+        assert!(Operation::try_from(make(serde_json::json!({"method":"PING","body":[]}))).is_err());
+        assert!(
+            Operation::try_from(make(
+                serde_json::json!({"method":"PING","body":{"id":{"$numberLong":"overflow"}}})
+            ))
+            .is_err()
+        );
+        assert!(Operation::try_from(make(serde_json::Value::Null)).is_err());
     }
 
     #[test]

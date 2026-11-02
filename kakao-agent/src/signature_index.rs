@@ -35,6 +35,11 @@ const TARGET_SOURCES: &[&str] = &[
     "LocoClient.kt",
     "LocoState.kt",
     "Loco.kt",
+    "LocoHeader.kt",
+    "LocoBody.kt",
+    "LocoReq.kt",
+    "LocoJob.kt",
+    "ChatRoomListManagerProvider.kt",
 ];
 const MAX_DEX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -531,6 +536,35 @@ fn ref_at(refs: &[Option<MethodRef>], index: usize) -> Option<&MethodRef> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// Run against a locally supplied, legally obtained APK; APKs are not fixtures.
+    #[test]
+    #[ignore = "requires NOA_COMPAT_APKS (colon-separated APK paths)"]
+    fn apk_signature_contract() {
+        let input = std::env::var("NOA_COMPAT_APKS").expect("set NOA_COMPAT_APKS");
+        let paths = std::env::split_paths(&input).collect::<Vec<_>>();
+        let index = SignatureIndex::read_apks(&paths).expect("read APK DEX index");
+        println!("{}\n{}", index.description(), index.encode().unwrap());
+        for source in TARGET_SOURCES {
+            // The provider is new in 26.9.x; legacy APKs use a companion singleton.
+            if *source == "ChatRoomListManagerProvider.kt" {
+                continue;
+            }
+            assert!(
+                index.classes_by_source.contains_key(*source),
+                "missing source: {source}"
+            );
+        }
+        for operation in ["chat-on-room", "join-link", "prepare-resend"] {
+            assert!(
+                index
+                    .operations
+                    .get(operation)
+                    .is_some_and(|refs| !refs.is_empty()),
+                "missing operation: {operation}"
+            );
+        }
+    }
 
     #[test]
     fn rejects_archives_without_dex_files() {

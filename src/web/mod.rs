@@ -30,6 +30,7 @@ use crate::{
 };
 
 mod iris_endpoint;
+mod loco;
 mod vox;
 mod vox_audio;
 
@@ -80,6 +81,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/send/text", web::post().to(send_text))
         .route("/internal/iris/reply", web::post().to(iris_reply))
         .configure(iris_endpoint::configure)
+        .configure(loco::configure)
         .configure(vox::configure)
         .configure(vox_audio::configure);
 }
@@ -1970,6 +1972,43 @@ mod tests {
         )
         .await;
         assert_eq!(loco_api.status(), StatusCode::OK);
+
+        for (body, token, expected) in [
+            (
+                serde_json::json!({"method":"PING","body":{}}),
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                serde_json::json!({"method":"ping","body":{}}),
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                serde_json::json!({"method":"PING","body":[]}),
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                serde_json::json!({"method":"PING","body":{},"packetId":1}),
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                serde_json::json!({"method":"PING","body":{}}),
+                true,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let mut request = test::TestRequest::post()
+                .uri("/api/loco/send")
+                .set_json(body);
+            if token {
+                request = request.insert_header((header::AUTHORIZATION, "Bearer test-token"));
+            }
+            let response = test::call_service(&app, request.to_request()).await;
+            assert_eq!(response.status(), expected);
+        }
 
         let hook_body = serde_json::json!({
             "type": "file",

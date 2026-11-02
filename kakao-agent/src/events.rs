@@ -6,10 +6,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use jni::sys::{JNIEnv, jint, jobject};
+use jni::sys::{JNIEnv, jint, jobject, jobjectArray};
 
 use crate::{
-    KIND_LOCO_SEND, instance_field, instance_field_by_type, log, object_text, unbox_number,
+    KIND_LOCO_SEND, app_class, call_static_object, check, log, object_text, object_value,
+    unbox_number,
 };
 
 type Event = serde_json::Value;
@@ -63,14 +64,31 @@ pub(crate) unsafe fn capture(env: *mut JNIEnv, kind: jint, packet: jobject) {
         return;
     }
     let result = (|| unsafe {
-        let header = instance_field_by_type(env, packet, "mt.b")?;
-        let body = instance_field_by_type(env, packet, "mt.a")?;
-        let packet_id = unbox_number(env, instance_field(env, header, "a")?)?;
-        let status = unbox_number(env, instance_field(env, header, "b")?)?;
-        let method = object_text(env, instance_field(env, header, "c")?)?;
-        let body_length = unbox_number(env, instance_field(env, header, "d")?)?;
-        let bson = instance_field(env, body, "a")?;
-        let body = object_text(env, bson)?;
+        let reader = app_class(env, "dev.noa.kakao.LocoPacketReader")?;
+        let values = call_static_object(
+            env,
+            reader,
+            "read",
+            "(Ljava/lang/Object;)[Ljava/lang/Object;",
+            &[object_value(packet)],
+        )? as jobjectArray;
+        if values.is_null() || ((**env).v1_4.GetArrayLength)(env, values) != 5 {
+            return Err("LOCO packet reader returned an invalid result".to_string());
+        }
+        check(env, "read LOCO packet array")?;
+        let mut fields = [std::ptr::null_mut(); 5];
+        for (index, field) in fields.iter_mut().enumerate() {
+            *field = ((**env).v1_4.GetObjectArrayElement)(env, values, index as jint);
+            check(env, "read LOCO packet field")?;
+            if field.is_null() {
+                return Err(format!("LOCO packet field {index} is null"));
+            }
+        }
+        let packet_id = unbox_number(env, fields[0])?;
+        let status = unbox_number(env, fields[1])?;
+        let method = object_text(env, fields[2])?;
+        let body_length = unbox_number(env, fields[3])?;
+        let body = object_text(env, fields[4])?;
         let direction = if kind == KIND_LOCO_SEND {
             "send"
         } else {

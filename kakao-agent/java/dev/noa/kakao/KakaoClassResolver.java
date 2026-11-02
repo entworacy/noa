@@ -106,11 +106,32 @@ final class KakaoClassResolver {
                 return companion;
             }
         }
+        if ("room-manager".equals(role)) return roomManager(type);
         List<Object> singletons = KakaoReflection.singletonObjects(type);
         if (!singletons.isEmpty()) {
             return singletons.get(0);
         }
         throw new NoSuchFieldException("singleton signature was not found for role: " + role);
+    }
+
+    static Object roomManager(Class<?> expected) throws Exception {
+        List<Object> legacy = KakaoReflection.singletonObjects(expected);
+        if (!legacy.isEmpty()) return legacy.get(0);
+        Method selected = null;
+        for (Class<?> provider : KakaoSignatureResolver.sourceClasses("ChatRoomListManagerProvider.kt")) {
+            for (Method method : provider.getDeclaredMethods()) {
+                if (!Modifier.isStatic(method.getModifiers())
+                        || method.getParameterTypes().length != 0
+                        || method.getReturnType() != expected) continue;
+                if (selected != null) throw new NoSuchMethodException("ambiguous room manager provider");
+                selected = method;
+            }
+        }
+        if (selected == null) throw new NoSuchMethodException("room manager provider not found");
+        selected.setAccessible(true);
+        Object value = selected.invoke(null);
+        if (value == null) throw new IllegalStateException("room manager provider returned null");
+        return value;
     }
 
     static Object staticValueFor(String role, String typeName) throws Exception {

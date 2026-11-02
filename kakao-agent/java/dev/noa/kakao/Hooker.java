@@ -17,6 +17,16 @@ public final class Hooker {
     }
 
     public Object callback(Object[] args) throws Throwable {
+        if (kind == 1 && !staticTarget && args.length > 0 && args[0] != null) {
+            synchronized (args[0]) {
+                LocoSender.observe(args[0]);
+                return invokeOriginal(args);
+            }
+        }
+        return invokeOriginal(args);
+    }
+
+    private Object invokeOriginal(Object[] args) throws Throwable {
         if (packetIndex >= 0 && packetIndex < args.length) {
             try {
                 Bridge.capture(kind, args[packetIndex]);

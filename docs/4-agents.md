@@ -43,7 +43,7 @@ Kakao/Iris 네이티브 에이전트는 최종 Noa 바이너리에 포함됩니�
 
 연결 종료는 해당 채널의 대기 요청만 실패시키며, Kakao PID가 바뀌면 모든 채널을 무효화합니다. 재연결은 채널별로 수행합니다. 초기 JVM·DEX·훅 설치는 기존대로 한 번 완료한 뒤 VOX 스레드를 시작하므로 기능별 초기화 자체를 독립시킨 구조는 아닙니다.
 
-내부 handshake는 프로토콜 `2`, 토큰, 채널명과 대상 PID를 검증합니다. 서버와 내장 에이전트를 함께 빌드·교체해야 하며 구형 에이전트와의 혼용은 거부합니다. 외부 HTTP 경로와 본문은 유지됩니다. `/api/status`의 `voxControlActive`, `voxAudioActive`는 각 전송 채널의 연결 준비 상태이며, 실제 VOX 오디오 훅 설치 여부는 VOX status의 `audio.hookReady`로 확인합니다.
+내부 handshake는 프로토콜 `2`, 토큰, 채널명과 대상 PID를 검증합니다. 서버와 내장 에이전트는 같은 배포 버전을 사용하며, 구형 에이전트와의 혼용은 거부합니다. 외부 HTTP 경로와 본문은 유지됩니다. `/api/status`의 `voxControlActive`, `voxAudioActive`는 각 전송 채널의 연결 준비 상태이며, 실제 VOX 오디오 훅 설치 여부는 VOX status의 `audio.hookReady`로 확인합니다.
 
 ## Kakao 에이전트 초기화
 
@@ -68,6 +68,14 @@ Kakao agent는 현재 Android JavaVM을 찾고 스레드를 attach한 뒤 내장
 - VOX WebRTC 마이크 frame에 명시적으로 공급된 PCM 교체 또는 혼합
 
 KakaoTalk 내부 클래스와 메서드는 난독화될 수 있으므로 호출 전에 reflection으로 정확한 parameter type과 arity를 검사합니다. 결과 객체와 식별자도 null, 양수 범위, 요청값 일치 여부를 단계마다 확인합니다.
+
+## LOCO 직접 발신
+
+`POST /api/loco/send`는 기존 인증을 거쳐 control 채널의 `send-loco` 명령을 보냅니다. 호스트와 에이전트가 같은 `noa-agent-protocol::loco::SendLocoRequest` 검증을 사용합니다. 에이전트는 JSON 값을 JNI로 Java Map/List 및 정확한 숫자 wrapper/byte 배열로 변환한 뒤 `LocoSender`를 호출합니다. 문자열은 UTF-16으로 생성하므로 이모지와 값 안의 NUL도 보존합니다. 키의 NUL은 BSON 규칙에 따라 거부합니다.
+
+`Hooker`는 정상 LOCO 송신에서 관찰한 client를 약한 참조로 보관합니다. `LocoSender`는 연결 상태와 client의 유효성을 확인하고, DEX 시그니처로 찾은 요청 빌더와 `LocoJob` 공용 ID 발급기를 사용합니다. 기존 송신과 API 송신 모두 client monitor를 잡고 같은 송신 메서드를 호출해 소켓 쓰기가 겹치지 않게 합니다. 연결 객체가 교체되면 다음 정상 송신에서 새 객체를 관찰합니다. 아직 관찰하지 못했거나 끊어진 객체이면 발신을 거부합니다.
+
+이 경로는 소켓 쓰기만 수행합니다. 앱의 요청/응답 대기 객체를 등록하지 않으며 서버 응답을 HTTP 결과에 연결하지 않습니다. 따라서 성공은 서버 처리 확인이 아닙니다. 상세 입력 타입과 예시는 [LOCO 발신 API 레퍼런스](6-api.md#post-apilocosend)를 참고하십시오.
 
 ## LOCO 이벤트 경로
 
@@ -102,7 +110,7 @@ queue는 192,000바이트로 제한하며 넘치면 지연 누적 대신 가장 
 4. 상주 agent 통신이 실패한 경우에만 XML dump 기반 복구 경로를 사용합니다.
 5. 한국어·영어 label과 KakaoTalk 버전별 resource ID 묶음을 함께 관리합니다.
 
-독립 실행형 `uiautomator runtest`와 호환되도록 레거시 `com.android.uiautomator` API를 사용합니다. 빌드 시 고정 Android 26 jar를 사용하고 시작 시 실제 기기 API와 필요한 JVM signature를 다시 검사합니다. 계약이 맞지 않으면 모호한 클릭을 시도하지 않습니다.
+독립 실행형 `uiautomator runtest`와 호환되도록 레거시 `com.android.uiautomator` API를 사용합니다. 시작 시 실제 기기 API와 필요한 JVM signature를 검사합니다. 계약이 맞지 않으면 모호한 클릭을 시도하지 않습니다.
 
 ## 작업별 안전장치
 

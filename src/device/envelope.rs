@@ -1,5 +1,7 @@
 use jni::{Env, JValue, jni_sig, jni_str, objects::JObject};
 
+use super::richtext::RichTextMessage;
+
 pub enum Outbound<'a> {
     Words {
         referer: &'a str,
@@ -13,9 +15,9 @@ pub enum Outbound<'a> {
         mime: &'a str,
         title: Option<&'a str>,
     },
-    Markdown {
+    RichText {
         room_id: i64,
-        text: &'a str,
+        message: &'a RichTextMessage,
     },
 }
 
@@ -46,23 +48,23 @@ pub fn assemble<'local>(
             mime,
             title,
         } => files(env, room_id, uris, mime, title),
-        Outbound::Markdown { room_id, text } => markdown(env, room_id, text),
+        Outbound::RichText { room_id, message } => richtext(env, room_id, message),
     }
 }
 
-fn markdown<'local>(
+fn richtext<'local>(
     env: &mut Env<'local>,
     room_id: i64,
-    text: &str,
+    message: &RichTextMessage,
 ) -> jni::errors::Result<PreparedEnvelope<'local>> {
     let mut draft = IntentDraft::blank(env)?;
     draft.package("com.kakao.talk")?;
     draft.component("com.kakao.talk.activity.RecentExcludeIntentFilterActivity")?;
     draft.action("android.intent.action.SEND")?;
     draft.kind("text/plain")?;
-    draft.text("android.intent.extra.TEXT", text)?;
-    draft.text("EXTRA_CHAT_MESSAGE", text)?;
-    draft.text("EXTRA_CHAT_ATTACHMENT", r#"{"markdown":true}"#)?;
+    draft.text("android.intent.extra.TEXT", &message.text)?;
+    draft.text("EXTRA_CHAT_MESSAGE", &message.text)?;
+    draft.text("EXTRA_CHAT_ATTACHMENT", &message.attachment())?;
     draft.integer("EXTRA_CHAT_MESSAGE_TYPE_VALUE", 1)?;
     draft.number("key_id", room_id)?;
     draft.integer("key_type", 1)?;

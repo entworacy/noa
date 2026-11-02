@@ -76,14 +76,6 @@ Iris 내부 브리지는 공개 토큰과 분리된 `NOA_IRIS_HOOK_TOKEN` 및 `X
 | `NOA_IRIS_ENDPOINT_PREFIX` | `/noa` | Iris 공개 확장 prefix |
 | `NOA_IRIS_ENDPOINT_BRIDGE_URL` | 로컬 `/internal/iris/endpoint` | 확장 API 내부 브리지 URL |
 
-## 빌드 구조
+## 내장 에이전트
 
-`scripts/build-android.sh`는 UI/Iris/Kakao Java 어댑터를 먼저 DEX로 만들고 ABI별 네이티브 에이전트와 Noa 바이너리를 빌드합니다. Kakao와 Iris 에이전트 `.so`는 최종 Noa 바이너리에 포함되며 실행 시 대상 프로세스로 주입됩니다. LSPlant, Frida, Android NDK 및 정적 C++ 런타임은 Android 네이티브 빌드에만 필요합니다.
-
-개발 호스트에서는 다음 검증을 실행할 수 있습니다.
-
-```bash
-cargo test --locked
-cargo test --manifest-path kakao-agent/Cargo.toml
-cargo clippy --manifest-path kakao-agent/Cargo.toml --all-targets -- -D warnings
-```
+Kakao와 Iris 네이티브 에이전트는 Noa 실행 파일에 포함되며, 실행 시 대상 프로세스로 주입됩니다. 서버와 에이전트는 같은 배포 버전의 구성 요소를 사용합니다.

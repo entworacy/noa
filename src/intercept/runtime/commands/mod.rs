@@ -22,6 +22,7 @@ pub(super) struct KakaoCommand {
 }
 
 enum KakaoAction {
+    SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     SendCustom {
         row_id: i64,
     },
@@ -91,6 +92,7 @@ impl KakaoAction {
 
     fn label(&self) -> &'static str {
         match self {
+            Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
             Self::KickMember { .. } => "참여자 강퇴",
             Self::HideMessage { .. } => "메시지 가리기",
@@ -423,4 +425,18 @@ fn send_command_blocking(room_id: i64, action: KakaoAction) -> Result<Option<Str
             "KakaoTalk 후킹 {label} 응답 채널이 종료되었습니다"
         ))),
     }
+}
+
+pub async fn send_loco(
+    request: noa_agent_protocol::loco::SendLocoRequest,
+) -> Result<Value, NoaError> {
+    request.validate().map_err(NoaError::BadRequest)?;
+    let value = tokio::task::spawn_blocking(move || {
+        send_command_blocking(0, KakaoAction::SendLoco(request))
+    })
+    .await
+    .map_err(|error| NoaError::Internal(error.to_string()))??
+    .ok_or_else(|| NoaError::AndroidUnavailable("LOCO 에이전트 응답이 없습니다".into()))?;
+    serde_json::from_str(&value)
+        .map_err(|error| NoaError::AndroidUnavailable(format!("LOCO 에이전트 응답 오류: {error}")))
 }

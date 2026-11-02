@@ -22,6 +22,8 @@ mod framework;
 #[cfg(any(target_os = "android", test))]
 mod queue;
 #[cfg(any(target_os = "android", test))]
+mod richtext;
+#[cfg(any(target_os = "android", test))]
 mod stubs;
 #[cfg(target_os = "android")]
 mod ui_agent;

@@ -10,9 +10,11 @@ Noa에는 두 종류의 전송 경로가 있습니다.
 |---|---|---|
 | `POST /send` | Android 공유 Intent | Intent 실행 완료 |
 | `POST /send/text` | KakaoTalk 답장 Service Intent | Service 호출 완료 |
-| Iris `markdown` | Android Intent | Intent 실행 완료 |
+| Iris `markdown` | Markdown → RichText 변환 후 Android Intent | Intent 실행 완료 |
 | Iris `file` | 파일 준비 후 공유 Intent | Intent 실행 완료 |
 | Iris `custom` | Kakao 내부 재전송 또는 접근성 재전송 | DB 이동 확인 |
+
+위 표의 Iris 성공 판단은 Noa 내부 처리 기준입니다. Iris `v0.33`의 `/reply` HTTP 응답은 비동기 접수 시점의 `Enqueued`이며, 이후 Noa의 처리 완료나 DB 확인 결과를 포함하지 않습니다.
 
 일반 텍스트·파일·Markdown은 `KAKAO_HOOK_ENABLED`와 무관하게 Android 프레임워크 Intent를 사용합니다. custom만 KakaoTalk 내부 DB 모델과 재전송 동작이 필요합니다.
 
@@ -37,9 +39,16 @@ KakaoTalk이 파일을 읽을 수 있도록 임시 디렉터리와 파일 권한
 
 ## 텍스트와 Markdown
 
-`POST /send/text`는 KakaoTalk NotificationActionService의 reply Intent를 구성합니다. `threadId`를 제공하면 thread reply 문맥을 포함하고, 없으면 일반 텍스트로 전송합니다. Android 버전별 Binder signature는 시작 시 확인한 뒤 API 26–29와 API 30 이상의 정확한 메서드를 선택합니다.
+`POST /send/text`는 KakaoTalk NotificationActionService의 reply Intent를 구성합니다. `threadId`를 제공하면 thread reply 문맥을 포함하고, 없으면 일반 텍스트로 전송합니다. Android 버전별 Binder signature는 시작 시 확인한 뒤 API 26부터 29까지와 API 30 이상의 정확한 메서드를 선택합니다.
 
 Iris `markdown`은 Iris `/reply` 요청을 에이전트가 가로채 Noa 내부 브리지로 넘깁니다. Noa가 대상 Room과 비어 있지 않은 Markdown 문자열을 검증한 후 Android relay가 KakaoTalk 공유 경로로 전달합니다.
+
+26.9.1 대응 전송은 Markdown의 굵게·기울임·취소선을 본문과 RichText attachment로 변환합니다. 예를 들어 `**안녕** 😀`는 본문 `안녕 😀`, attachment `{"richText":{"bold":[[0,2]]}}`가 됩니다. `android.intent.extra.TEXT`와 `EXTRA_CHAT_MESSAGE`에는 같은 변환 본문을 넣고, `EXTRA_CHAT_ATTACHMENT`에는 위 JSON을 넣습니다. 메시지 타입은 텍스트(1)입니다.
+
+RichText의 `bold`, `italic`, `strike` 배열은 각각 `[시작 위치, 길이]` 쌍이며 Java 문자열의 UTF-16 단위로 계산합니다. 동일 서식의 겹치거나 이어진 범위는 합칩니다. CommonMark 파서로 중첩·이스케이프를 처리하고 취소선 확장을 사용합니다. 코드 안의 문법은 서식으로 해석하지 않으며, 지원 범위 밖인 제목·목록·링크·코드 표기는 원문으로 유지합니다. 공백과 줄바꿈도 유지합니다. 기존 `markdown: true` 플래그는 제거했습니다.
+
+이 형식은 26.9.1 APK의 RichText serializer와 공유 Intent → ChatSendingLog 경로를 분석해 구현했습니다. 구버전에서 RichText가 표시되는지는 별도 검증하지 않았습니다. 실제 전송 및 화면 표시는 테스트 기기가 없어 미검증입니다.
+
 
 ## Custom 메시지
 

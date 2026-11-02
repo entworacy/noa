@@ -55,7 +55,14 @@ final class KakaoRoomResolver {
             if (type.isInterface() || type.isEnum() || type.getDeclaredMethods().length < 20) {
                 continue;
             }
-            for (Object repository : KakaoReflection.singletonObjects(type)) {
+            Object repository;
+            try {
+                repository = KakaoClassResolver.roomManager(type);
+            } catch (Exception error) {
+                KakaoReflection.remember(failures, type.getName(), error);
+                continue;
+            }
+            {
                 for (Method method : type.getDeclaredMethods()) {
                     Class<?>[] parameters = method.getParameterTypes();
                     if (Modifier.isStatic(method.getModifiers())
