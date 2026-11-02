@@ -12,7 +12,6 @@ use url::Url;
 use super::{
     envelope::{self, Outbound},
     framework::FrameworkChannel,
-    richtext::RichTextMessage,
     vm::RuntimeVm,
 };
 use crate::{asset::PreparedAsset, failure::NoaError, settings::Settings};
@@ -26,10 +25,6 @@ enum Job {
         room_id: i64,
         text: String,
         thread_id: Option<i64>,
-    },
-    RichText {
-        room_id: i64,
-        message: RichTextMessage,
     },
 }
 
@@ -77,14 +72,6 @@ impl OutboundQueue {
             room_id,
             text,
             thread_id,
-        })
-        .await
-    }
-
-    pub async fn deliver_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
-        self.submit(Job::RichText {
-            room_id,
-            message: RichTextMessage::from_markdown(&text),
         })
         .await
     }
@@ -195,13 +182,6 @@ fn execute(
                 },
             )?
         }
-        Job::RichText { room_id, message } => envelope::assemble(
-            env,
-            Outbound::RichText {
-                room_id,
-                message: &message,
-            },
-        )?,
     };
     channel.transmit(env, prepared)
 }

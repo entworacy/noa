@@ -55,6 +55,7 @@ pub(crate) struct Request {
 
 #[derive(Clone)]
 pub(crate) enum Operation {
+    RequireRichText,
     SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     Send {
         room: i64,
@@ -160,6 +161,11 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         Err(error) => return (id, Err(error)),
     };
     let result = match &active.state.operation {
+        Operation::RequireRichText => with_env(|env| unsafe {
+            let resolver = crate::app_class(env, "dev.noa.kakao.KakaoSignatureResolver")?;
+            crate::call_static_void(env, resolver, "requireRichText", "()V", &[])?;
+            Ok(None)
+        }),
         Operation::SendLoco(packet) => {
             with_env(|env| unsafe { packets::send_loco(env, packet) }).map(Some)
         }
@@ -187,6 +193,7 @@ impl TryFrom<Request> for Operation {
 
     fn try_from(request: Request) -> Result<Self, Self::Error> {
         match request.action.as_str() {
+            "require-richtext" => Ok(Self::RequireRichText),
             "send-loco" => {
                 let packet = request.packet.ok_or("packet is required")?;
                 packet.validate()?;
@@ -568,6 +575,14 @@ mod tests {
 
     #[test]
     fn parses_supported_commands() {
+        let probe = request(serde_json::json!({
+            "token": "secret", "id": 8, "action": "require-richtext"
+        }));
+        assert_eq!(probe.channel(), Some(noa_agent_protocol::Channel::Control));
+        assert!(matches!(
+            Operation::try_from(probe).unwrap(),
+            Operation::RequireRichText
+        ));
         let send = Operation::try_from(request(serde_json::json!({
             "token": "secret",
             "id": 1,

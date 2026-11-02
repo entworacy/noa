@@ -162,6 +162,18 @@ pub fn record_loco_packet(packet: LocoPacket) {
 }
 
 #[cfg(target_os = "android")]
+pub async fn require_richtext() -> Result<(), crate::failure::NoaError> {
+    runtime::require_richtext().await
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn require_richtext() -> Result<(), crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable(
+        "RichText 전송에는 Android KakaoTalk 후킹 에이전트가 필요합니다".to_string(),
+    ))
+}
+
+#[cfg(target_os = "android")]
 pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), crate::failure::NoaError> {
     runtime::send_custom(room_id, row_id).await
 }

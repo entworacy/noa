@@ -452,13 +452,15 @@ Iris `v0.33`의 `/reply` 성공 응답은 `{"success":true,"message":"Enqueued"}
 
 #### Markdown
 
-Markdown 문자열을 카카오톡 26.9.1의 RichText 형식으로 변환해 전송합니다.
+Markdown 문자열을 카카오톡 RichText 형식으로 변환해 내부 재전송 경로로 전송합니다. 카카오톡 26.9 이상과 `KAKAO_HOOK_ENABLED=true`가 필요합니다.
 
 ```json
 {"type":"markdown","room":"123456789","data":"**굵은 메시지**"}
 ```
 
-`**굵게**`/`__굵게__`, `*기울임*`/`_기울임_`, `~~취소선~~`을 본문과 RichText 서식 범위로 변환합니다. 중첩 서식과 한글·이모지를 지원하며, 제목·목록·링크·코드 등 그 밖의 문법은 원문으로 남깁니다. 응답 성공은 Intent 실행 완료이며 실제 수신·표시는 기기 확인이 필요합니다.
+`**굵게**`/`__굵게__`, `*기울임*`/`_기울임_`, `~~취소선~~`을 본문과 RichText 서식 범위로 변환합니다. 중첩 서식과 한글·이모지를 지원하며, 제목·목록·링크·코드 등 그 밖의 문법은 원문으로 남깁니다. Noa 내부 처리 성공은 같은 `client_message_id`의 `chat_logs` 기록 확인을 뜻합니다. 실제 수신·표시는 기기 확인이 필요합니다.
+
+지원하지 않는 버전이나 비후킹 모드에서는 DB 기록 전에 오류를 반환합니다. Iris의 비동기 `Enqueued` 응답에는 이후 Noa의 지원 여부 검사나 전송 결과가 포함되지 않습니다.
 
 #### 파일
 
@@ -497,13 +499,13 @@ Android 파일 경로 또는 Base64/Data URI로 파일을 전송합니다.
 
 `data.type`의 범위는 `1..65535`입니다. `data.chat_id`를 지정하면 `room`과 같아야 합니다.
 
-Noa 내부 브리지의 `file`과 `markdown` 처리 완료 결과:
+Noa 내부 브리지의 `file` 처리 완료 결과:
 
 ```json
 {"success":true,"message":"success"}
 ```
 
-Noa 내부 브리지의 `custom` 처리 완료 결과:
+Noa 내부 브리지의 `markdown`과 `custom` 처리 완료 결과:
 
 ```json
 {

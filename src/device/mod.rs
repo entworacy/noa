@@ -22,8 +22,6 @@ mod framework;
 #[cfg(any(target_os = "android", test))]
 mod queue;
 #[cfg(any(target_os = "android", test))]
-mod richtext;
-#[cfg(any(target_os = "android", test))]
 mod stubs;
 #[cfg(target_os = "android")]
 mod ui_agent;
@@ -88,16 +86,6 @@ impl KakaoRelay {
 
     #[cfg(not(target_os = "android"))]
     pub async fn deliver_text(&self, _: i64, _: String, _: Option<i64>) -> Result<(), NoaError> {
-        unavailable()
-    }
-
-    #[cfg(target_os = "android")]
-    pub async fn deliver_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
-        self.queue.deliver_markdown(room_id, text).await
-    }
-
-    #[cfg(not(target_os = "android"))]
-    pub async fn deliver_markdown(&self, _: i64, _: String) -> Result<(), NoaError> {
         unavailable()
     }
 

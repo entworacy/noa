@@ -8,6 +8,7 @@ mod intercept;
 mod kakao;
 mod model;
 mod reconcile;
+mod richtext;
 mod settings;
 mod web;
 

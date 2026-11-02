@@ -1,4 +1,4 @@
-//! KakaoTalk 26.9.1 RichText uses UTF-16 [location, length] pairs.
+//! KakaoTalk RichText uses UTF-16 [location, length] pairs.
 //! Only supported inline styles are translated; other Markdown stays literal.
 use std::{collections::BTreeMap, ops::Range};
 

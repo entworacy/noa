@@ -91,17 +91,20 @@ DEX 인덱스에는 `LocoHeader.kt`, `LocoBody.kt`를 추가했다. `ChatRoomLis
 
 ## 2026-11-02 Markdown → RichText 전송 변경
 
-앞선 RichText 점검은 기존 재전송 계약의 유지 여부만 다뤘다. 이번에는 Iris `type: "markdown"` 입력을 실제 RichText attachment로 변환하도록 전송 경로를 변경했다. API 입력은 유지하고 `markdown: true`를 제거했다. 지원 문법과 예시는 [전송 문서](3-delivery.md)를 참고한다.
+Iris `type: "markdown"` 입력을 RichText attachment로 변환하고 KakaoTalk 내부 재전송 경로로 발신한다. API 입력은 유지하고 `markdown: true`를 제거했다. RichText는 26.9.x부터 지원하므로 이전 버전은 DB 기록 전에 거부한다. 지원 문법과 예시는 [전송 문서](3-delivery.md)를 참고한다.
 
 같은 26.9.1 APK에서 추가로 확인한 근거:
 
 - `RichText$a.<clinit>`의 serializer 키는 `bold`, `italic`, `strike`이며 모두 기본값이 있는 목록이다.
 - `RichTextRange`는 `loc`, `length`를 가지며 `wkb1.c`가 두 정수를 순서대로 JSON 배열로 직렬화한다.
 - `com.kakao.talk.chat.richtext.a$a.b(Spanned)`는 `getSpanStart`, `getSpanEnd`와 그 차이로 범위를 만든다. 따라서 바이트나 Unicode code point가 아닌 UTF-16 단위다. `c(List)`는 같은 서식의 겹치거나 이어진 범위를 병합한다.
-- `y0g(Intent)`는 `EXTRA_CHAT_MESSAGE`, `EXTRA_CHAT_ATTACHMENT`, 타입을 읽고 `a(listener,long)`에서 ChatSendingLog builder에 전달한다. `ShareManager.f0` 역시 텍스트 경로에서 attachment JSON을 전달한다.
+- 공유 Intent의 attachment 처리 코드만으로 RichText 발신 가능 여부를 판단했던 기존 구현을 제거했다. Noa의 RichText 전송은 Intent를 거치지 않는다.
 - `ChatSendingLog.f2`는 `richText`를 `eq9.x`로 파싱한다. `ChatSendingLog.U`는 `richText`를 `getJSONObject`로 읽어 전송 attachment에 복사하므로 JSON 문자열이 아닌 중첩 객체를 넣는다.
+- DB 엔티티를 받는 `ChatSendingLog(e9b)` 생성자는 attachment를 보관하고 `f2`를 호출해 RichText를 복원한다.
+- `ChatSendingLogRequest.d0`는 `ChatSendingLog.H(room)`으로 얻은 attachment 문자열을 `rk70.S0`의 내부 LOCO WRITE 요청에 전달한다. `H`는 텍스트의 기존 attachment를 보존한다.
+- Noa는 실행 중인 앱의 `versionName`과 sending-log의 RichText 반환형을 검사한 뒤 대기 행을 등록하고, 기존 `Resend` 호출과 `client_message_id` 기반 DB 확인을 사용한다. 비후킹 모드에서는 거부한다.
 
-검증: 변환 테스트 6개를 포함한 루트 Rust 테스트 59개 및 ARM64 Noa 릴리즈 빌드 통과. 4,096개 문법/Unicode 조합에서 패닉 없이 유효한 UTF-16 범위를 생성하는 것도 검사했다. 실제 Android 수신·서식 표시 확인은 미실시이며, 기존 릴리즈에 이 변경이 포함된 것은 아니다.
+검증 범위는 UTF-16 서식 변환, sending-log 입력 생성, 비후킹 모드 거부, 버전 경계 및 RichText 모델 검사다. 4,096개 문법/Unicode 조합에서 유효한 UTF-16 범위를 생성하는 것도 검사한다. 실제 Android 수신·서식 표시 확인은 미실시다.
 
 
 ## LOCO 직접 발신 API 추가

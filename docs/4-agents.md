@@ -135,8 +135,9 @@ queue는 192,000바이트로 제한하며 넘치면 지연 누적 대신 가장 
 
 | 기능 | 후킹 활성화 | 후킹 비활성화 |
 |---|---|---|
-| 텍스트·파일·Markdown | Android Intent | Android Intent |
-| custom | Kakao 내부 함수 + DB 검증 | UI 재전송 + DB 검증 |
+| 텍스트·파일 | Android Intent | Android Intent |
+| Markdown → RichText | Kakao 내부 함수 + DB 검증 | 지원하지 않음 (`503`) |
+| custom | Kakao 내부 함수 + DB 검증 | UI 재전송 + DB 검증 (RichText 제외) |
 | 오픈채팅 입장 | Kakao 내부 JOINLINK | 의미 기반 UI |
 | 프로필 조회 | DB | DB |
 | 프로필 공유 | 내부 조회 또는 UI + 검증 | UI + 검증 |

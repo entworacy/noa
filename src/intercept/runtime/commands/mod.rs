@@ -22,6 +22,7 @@ pub(super) struct KakaoCommand {
 }
 
 enum KakaoAction {
+    RequireRichText,
     SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     SendCustom {
         row_id: i64,
@@ -92,6 +93,7 @@ impl KakaoAction {
 
     fn label(&self) -> &'static str {
         match self {
+            Self::RequireRichText => "RichText 지원 확인",
             Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
             Self::KickMember { .. } => "참여자 강퇴",
@@ -142,6 +144,13 @@ pub(super) fn fail_pending(message: &str) {
         }
     }
 }
+pub async fn require_richtext() -> Result<(), NoaError> {
+    tokio::task::spawn_blocking(|| send_command_blocking(0, KakaoAction::RequireRichText))
+        .await
+        .map_err(|error| NoaError::Internal(error.to_string()))??;
+    Ok(())
+}
+
 pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), NoaError> {
     tokio::task::spawn_blocking(move || {
         send_command_blocking(room_id, KakaoAction::SendCustom { row_id })

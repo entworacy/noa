@@ -32,6 +32,7 @@ impl Channel {
     pub fn for_action(action: &str) -> Option<Self> {
         match action {
             "send-loco"
+            | "require-richtext"
             | "send-custom"
             | "kick-member"
             | "hide-message"

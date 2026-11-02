@@ -74,6 +74,11 @@ public final class KakaoSignatureResolver {
         KakaoSendingResolver.resend(room, entry, commandId);
     }
 
+    /** Rejects unsupported RichText sends before the host writes a pending row. */
+    public static void requireRichText() throws Exception {
+        RichTextSupport.require(currentApplication(), appLoader());
+    }
+
     /** Diagnostic text used by startup logs and compatibility reports. */
     public static String describe() throws Exception {
         State value = appState();

@@ -54,6 +54,44 @@ fn reply(peer: &mut TcpStream) {
 }
 
 #[test]
+fn richtext_preflight_propagates_support_and_rejection() {
+    for supported in [true, false] {
+        let (state, commands) = ChannelState::new(1);
+        state.connected();
+        let response = enqueue(&state, 9, KakaoAction::RequireRichText);
+        let command = commands.recv().unwrap();
+        let (mut connection, mut peer) = pair();
+        let responder = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(peer.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({"token": "test", "id": 9, "action": "require-richtext"})
+            );
+            writeln!(
+                peer,
+                "{}",
+                serde_json::json!({
+                    "id": 9, "ok": supported, "error": "RichText requires KakaoTalk 26.9 or later",
+                })
+            )
+            .unwrap();
+        });
+        transact_kakao(&mut connection, "test", &command, Channel::Control, &state).unwrap();
+        let result = response.recv_timeout(Duration::from_secs(1)).unwrap();
+        if supported {
+            assert_eq!(result, Ok(None));
+        } else {
+            assert!(result.unwrap_err().contains("26.9"));
+        }
+        responder.join().unwrap();
+    }
+}
+
+#[test]
 fn idle_connection_detects_peer_shutdown_without_sending_a_command() {
     let (connection, peer) = pair();
     assert!(connection.idle());

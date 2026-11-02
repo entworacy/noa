@@ -1216,7 +1216,7 @@ async fn deliver_iris_extension(
 ) -> Result<Option<IrisCustomResult>, NoaError> {
     match request.reply_type.to_ascii_lowercase().as_str() {
         "file" => deliver_iris_file(request, state).await.map(|_| None),
-        "markdown" => deliver_iris_markdown(request, state).await.map(|_| None),
+        "markdown" => deliver_iris_markdown(request, state).await.map(Some),
         "custom" => deliver_iris_custom(request, state).await.map(Some),
         reply_type => Err(NoaError::BadRequest(format!(
             "지원하지 않는 Iris reply type입니다: {reply_type}"
@@ -1288,6 +1288,18 @@ async fn deliver_iris_custom(
     }
     let attachment =
         json_column(data.attachment, "attachment", Some("{}"))?.unwrap_or_else(|| "{}".to_string());
+    if serde_json::from_str::<serde_json::Value>(&attachment)
+        .is_ok_and(|value| value.get("richText").is_some())
+    {
+        if !state.config.kakao_hook_enabled {
+            return Err(NoaError::AndroidUnavailable(
+                "RichText 전송에는 KAKAO_HOOK_ENABLED=true가 필요합니다".to_string(),
+            ));
+        }
+        // Check the running app before inserting a pending row. Older apps must
+        // never silently send the converted text without its formatting.
+        crate::intercept::require_richtext().await?;
+    }
     let supplement = json_column(data.supplement, "supplement", None)?;
     let metadata = json_column(data.v, "v", None)?;
     let thread_id = data.thread_id.map(IdInput::resolve).transpose()?;
@@ -1425,13 +1437,23 @@ fn json_column(
 async fn deliver_iris_markdown(
     request: IrisReplyRequest,
     state: &AppState,
-) -> Result<(), NoaError> {
-    let relay = state.relay.clone().ok_or_else(|| {
-        NoaError::AndroidUnavailable("Android JNI 계층이 초기화되지 않았습니다".to_string())
-    })?;
-    let chat_id = request.room.resolve()?;
+) -> Result<IrisCustomResult, NoaError> {
+    deliver_iris_custom(markdown_custom_request(request)?, state).await
+}
+
+fn markdown_custom_request(request: IrisReplyRequest) -> Result<IrisReplyRequest, NoaError> {
     let text = iris_markdown_text(request.data)?;
-    relay.deliver_markdown(chat_id, text).await
+    let message = crate::richtext::RichTextMessage::from_markdown(&text);
+    Ok(IrisReplyRequest {
+        reply_type: "custom".to_string(),
+        room: request.room,
+        data: Some(serde_json::json!({
+            "type": 1,
+            "message": message.text,
+            "attachment": message.attachment(),
+        })),
+        path: None,
+    })
 }
 
 fn iris_markdown_text(data: Option<serde_json::Value>) -> Result<String, NoaError> {
@@ -1443,6 +1465,11 @@ fn iris_markdown_text(data: Option<serde_json::Value>) -> Result<String, NoaErro
     if text.trim().is_empty() {
         return Err(NoaError::BadRequest(
             "markdown 요청의 data는 비어 있을 수 없습니다".to_string(),
+        ));
+    }
+    if text.len() > 1_000_000 {
+        return Err(NoaError::BadRequest(
+            "markdown 요청의 data가 너무 큽니다".to_string(),
         ));
     }
     Ok(text)
@@ -1873,6 +1900,29 @@ mod tests {
         assert!(iris_markdown_text(None).is_err());
         assert!(iris_markdown_text(Some(serde_json::json!(42))).is_err());
         assert!(iris_markdown_text(Some(serde_json::json!("  "))).is_err());
+        assert!(iris_markdown_text(Some(serde_json::json!("x".repeat(1_000_001)))).is_err());
+    }
+
+    #[actix_web::test]
+    async fn markdown_uses_text_sending_log_with_utf16_attachment() {
+        let request: IrisReplyRequest = serde_json::from_value(serde_json::json!({
+            "type": "markdown", "room": "123", "data": "**안녕😀** *world*",
+        }))
+        .unwrap();
+        let request = markdown_custom_request(request).unwrap();
+        assert_eq!(request.reply_type, "custom");
+        assert_eq!(request.room.resolve().unwrap(), 123);
+        let data: IrisCustomData = serde_json::from_value(request.data.unwrap()).unwrap();
+        assert_eq!(data.message_type, 1);
+        assert_eq!(data.message, "안녕😀 world");
+        assert_eq!(data.scope, 1);
+        let attachment = json_column(data.attachment, "attachment", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&attachment).unwrap(),
+            serde_json::json!({"richText":{"bold":[[0,4]],"italic":[[5,5]]}})
+        );
     }
 
     #[actix_web::test]
@@ -1919,6 +1969,26 @@ mod tests {
             rooms: Arc::new(RwLock::new(Vec::new())),
             live_events,
         };
+        // With no catalog or relay, RichText must still fail at the hook gate
+        // before touching the DB. Cover both markdown and raw custom inputs.
+        let mut disabled = state.clone();
+        Arc::make_mut(&mut disabled.config).kakao_hook_enabled = false;
+        for payload in [
+            serde_json::json!({"type":"markdown", "room":"123", "data":"**hello**"}),
+            serde_json::json!({"type":"custom", "room":"123", "data":{
+                "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
+            }}),
+            serde_json::json!({"type":"custom", "room":"123", "data":{
+                "type":1, "message":"hello", "attachment":"{\"richText\":{}}"
+            }}),
+        ] {
+            let error = deliver_iris_extension(serde_json::from_value(payload).unwrap(), &disabled)
+                .await
+                .err()
+                .expect("RichText requires the hook");
+            assert!(matches!(error, NoaError::AndroidUnavailable(_)));
+            assert!(error.to_string().contains("KAKAO_HOOK_ENABLED=true"));
+        }
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
