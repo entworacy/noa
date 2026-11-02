@@ -85,6 +85,8 @@ public final class LocoSignatureResolver {
                 matched = new Resolution(send, receive, resume);
             }
             if (matched != null) {
+                LocoPacketReader.verify(matched.send.getParameterTypes()[0]);
+                LocoPacketReader.verify(matched.receive.getParameterTypes()[0]);
                 matched.send.setAccessible(true);
                 matched.receive.setAccessible(true);
                 matched.resume.setAccessible(true);

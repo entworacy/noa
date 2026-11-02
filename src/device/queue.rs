@@ -26,7 +26,7 @@ enum Job {
         text: String,
         thread_id: Option<i64>,
     },
-    Markdown {
+    LegacyMarkdown {
         room_id: i64,
         text: String,
     },
@@ -80,8 +80,8 @@ impl OutboundQueue {
         .await
     }
 
-    pub async fn deliver_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
-        self.submit(Job::Markdown { room_id, text }).await
+    pub async fn deliver_legacy_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
+        self.submit(Job::LegacyMarkdown { room_id, text }).await
     }
 
     async fn submit(&self, job: Job) -> Result<(), NoaError> {
@@ -190,9 +190,9 @@ fn execute(
                 },
             )?
         }
-        Job::Markdown { room_id, text } => envelope::assemble(
+        Job::LegacyMarkdown { room_id, text } => envelope::assemble(
             env,
-            Outbound::Markdown {
+            Outbound::LegacyMarkdown {
                 room_id,
                 text: &text,
             },

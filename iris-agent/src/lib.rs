@@ -1,4 +1,5 @@
 mod java;
+mod reply;
 pub(crate) use java::{
     array_element, array_length, call_static_object, check, find_class, find_method, int_value,
     invoke_reflect, java_byte_array, java_string, load_class, native_method, new_object,
@@ -203,6 +204,9 @@ fn initialize_runtime() -> Result<(), String> {
             let parent = system_loader(env)?;
             let loader = create_loader(env, parent)?;
             register_bridge(env, loader)?;
+            let factory = load_class(env, loader, "dev.noa.iris.ReplyRequestFactory")?;
+            // Check the request model before installing any hooks.
+            call_static_object(env, factory, "typeName", "()Ljava/lang/String;", &[])?;
             let lsplant = load_lsplant()?;
             if !noa_lsplant_init(env, lsplant) {
                 return Err(lsplant_initialization_error());
@@ -388,8 +392,8 @@ unsafe fn intercept_deserialize(env: *mut JNIEnv, args: jobjectArray) -> Result<
         Some(_) => return Err("Iris /reply type must be a string".to_string()),
     };
     let policy = policy()?;
-    let selected = policy.types.contains(reply_type);
-    validate_shape(object, selected)?;
+    let selected = reply::selected(&policy.types, reply_type, object);
+    reply::validate_shape(object, selected)?;
     let room = object
         .get("room")
         .and_then(Value::as_str)
@@ -400,7 +404,7 @@ unsafe fn intercept_deserialize(env: *mut JNIEnv, args: jobjectArray) -> Result<
         Some(_) => return Err("Iris /reply threadId must be a string".to_string()),
     };
     let room_object = unsafe { new_string(env, room)? };
-    let (enum_name, data) = if selected {
+    let (wire_type, data) = if selected {
         let id = next_sequence();
         let id_text = id.to_string();
         let sentinel = format!("{}{}", policy.marker, id_text);
@@ -416,21 +420,16 @@ unsafe fn intercept_deserialize(env: *mut JNIEnv, args: jobjectArray) -> Result<
         values.retain(|_, value| value.created.elapsed() < Duration::from_secs(120));
         values.insert(id_text, pending_reply);
         drop(values);
-        ("TEXT", unsafe { make_json_primitive(env, &sentinel)? })
+        ("text", unsafe { make_json_primitive(env, &sentinel)? })
     } else {
-        let enum_name = match reply_type {
-            "text" => "TEXT",
-            "image" => "IMAGE",
-            "image_multiple" => "IMAGE_MULTIPLE",
-            value => return Err(format!("unsupported Iris /reply type: {value}")),
-        };
         if !object.contains_key("data") {
             return Err("Iris /reply data is required".to_string());
         }
-        (enum_name, unsafe { json_object_get(env, decoded, "data")? })
+        (reply_type, unsafe {
+            json_object_get(env, decoded, "data")?
+        })
     };
-    let enum_value = unsafe { reply_type_value(env, enum_name)? };
-    unsafe { new_reply_request(env, enum_value, room_object, data, thread_id) }
+    unsafe { new_reply_request(env, wire_type, room_object, data, thread_id) }
 }
 
 unsafe fn intercept_send(
@@ -510,20 +509,6 @@ fn log_routing_inspection_bypass(reason: &str) {
             &format!("Iris routing inspection bypassed: {reason}"),
         );
     }
-}
-
-fn validate_shape(object: &serde_json::Map<String, Value>, selected: bool) -> Result<(), String> {
-    for key in object.keys() {
-        let allowed = matches!(key.as_str(), "type" | "room" | "data" | "threadId")
-            || selected && key == "path";
-        if !allowed {
-            return Err(format!("unknown Iris /reply field: {key}"));
-        }
-    }
-    if !matches!(object.get("room"), Some(Value::String(_))) {
-        return Err("Iris /reply room must be a string".to_string());
-    }
-    Ok(())
 }
 
 fn notify_ready() -> Result<(), String> {
@@ -896,24 +881,30 @@ unsafe fn json_object_get(env: *mut JNIEnv, object: jobject, key: &str) -> Resul
     }
 }
 
-unsafe fn reply_type_value(env: *mut JNIEnv, name: &str) -> Result<jobject, String> {
-    let class = unsafe { app_class(env, "party.qwer.iris.model.ReplyType")? };
-    unsafe { static_object(env, class, name, "Lparty/qwer/iris/model/ReplyType;") }
-}
-
 unsafe fn new_reply_request(
     env: *mut JNIEnv,
-    reply_type: jobject,
+    reply_type: &str,
     room: jobject,
     data: jobject,
     thread_id: jobject,
 ) -> Result<jobject, String> {
-    let class = unsafe { app_class(env, "party.qwer.iris.model.ReplyRequest")? };
+    let runtime = RUNTIME
+        .get()
+        .ok_or_else(|| "runtime is unavailable".to_string())?;
+    let class = unsafe {
+        load_class(
+            env,
+            runtime.loader as jobject,
+            "dev.noa.iris.ReplyRequestFactory",
+        )?
+    };
+    let reply_type = unsafe { new_string(env, reply_type)? };
     unsafe {
-        new_object(
+        call_static_object(
             env,
             class,
-            "(Lparty/qwer/iris/model/ReplyType;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V",
+            "create",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
             &[
                 object_value(reply_type),
                 object_value(room),

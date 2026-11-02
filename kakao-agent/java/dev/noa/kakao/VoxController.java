@@ -14,8 +14,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class VoxController {
     private static final String FACADE =
             "com.kakao.talk.module.vox.contract.VoxModuleFacade";
-    private static final String FACADE_FACTORY =
-            "com.kakao.talk.vox.VoxModuleFacadeFactory";
+    private static final String[] FACADE_FACTORIES = {
+        "com.kakao.talk.vox.facade.VoxFacadeModuleFactory",
+        "com.kakao.talk.vox.VoxModuleFacadeFactory",
+    };
     private static final String MAKING_INFO =
             "com.kakao.talk.module.vox.domain.model.cecall.CecallMakingInfo";
     private static final String OUTGOING_AUTO =
@@ -194,12 +196,13 @@ public final class VoxController {
             if (existing != null) return existing;
             ClassLoader loader = context.getClass().getClassLoader();
             Class<?> facadeType = load(loader, FACADE);
-            Class<?> factoryType = load(loader, FACADE_FACTORY);
+            Class<?> factoryType = factoryType(loader);
             Constructor<?> constructor = factoryType.getDeclaredConstructor();
             constructor.setAccessible(true);
             Object factory = constructor.newInstance();
             for (Method method : factoryType.getMethods()) {
                 if (method.getParameterTypes().length == 1
+                        && method.getParameterTypes()[0].getName().equals("android.content.Context")
                         && facadeType.isAssignableFrom(method.getReturnType())) {
                     method.setAccessible(true);
                     existing = method.invoke(factory, context);
@@ -211,6 +214,17 @@ public final class VoxController {
             }
             throw new NoSuchMethodException("VoxModuleFacade factory method");
         }
+    }
+
+    private static Class<?> factoryType(ClassLoader loader) throws ClassNotFoundException {
+        for (String name : FACADE_FACTORIES) {
+            try {
+                return Class.forName(name, true, loader);
+            } catch (ClassNotFoundException absent) {
+                // KakaoTalk moved the factory in 26.9.x; retain the legacy path.
+            }
+        }
+        throw new ClassNotFoundException("No supported VoxModuleFacade factory is installed");
     }
 
     private static Object application() throws Exception {

@@ -192,6 +192,12 @@ fn transact_kakao(
         return Ok(());
     }
     let request = match &command.action {
+        KakaoAction::RequireRichText => serde_json::json!({
+            "token": token, "id": command.id, "action": "require-richtext",
+        }),
+        KakaoAction::SendLoco(packet) => serde_json::json!({
+            "token": token, "id": command.id, "action": "send-loco", "packet": packet,
+        }),
         KakaoAction::SendCustom { row_id } => serde_json::json!({
             "token": token,
             "id": command.id,

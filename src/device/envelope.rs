@@ -13,7 +13,7 @@ pub enum Outbound<'a> {
         mime: &'a str,
         title: Option<&'a str>,
     },
-    Markdown {
+    LegacyMarkdown {
         room_id: i64,
         text: &'a str,
     },
@@ -46,11 +46,11 @@ pub fn assemble<'local>(
             mime,
             title,
         } => files(env, room_id, uris, mime, title),
-        Outbound::Markdown { room_id, text } => markdown(env, room_id, text),
+        Outbound::LegacyMarkdown { room_id, text } => legacy_markdown(env, room_id, text),
     }
 }
 
-fn markdown<'local>(
+fn legacy_markdown<'local>(
     env: &mut Env<'local>,
     room_id: i64,
     text: &str,

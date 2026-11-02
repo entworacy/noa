@@ -3,10 +3,9 @@ use transport::serve;
 mod java;
 pub(crate) use java::{
     bool_value, box_long, call_boolean, call_long, call_object, call_static_boolean,
-    call_static_object, call_static_void, check, find_class, find_exact_method, instance_field,
-    instance_field_by_type, int_value, invoke, java_string, load_class, long_value, native_method,
-    new_object, new_string, object_array, object_text, object_value, static_field, unbox_long,
-    unbox_number,
+    call_static_object, call_static_void, check, find_class, find_exact_method, int_value, invoke,
+    java_string, load_class, long_value, native_method, new_object, new_string, object_array,
+    object_text, object_value, static_field, unbox_long, unbox_number,
 };
 use noa_agent_runtime::{
     jvm::{locate_vm, with_attached},
