@@ -91,7 +91,7 @@ DEX 인덱스에는 `LocoHeader.kt`, `LocoBody.kt`를 추가했다. `ChatRoomLis
 
 ## 2026-11-02 Markdown → RichText 전송 변경
 
-Iris `type: "markdown"` 입력을 RichText attachment로 변환하고 KakaoTalk 내부 재전송 경로로 발신한다. API 입력은 유지하고 `markdown: true`를 제거했다. RichText는 26.9.x부터 지원하므로 이전 버전은 DB 기록 전에 거부한다. 지원 문법과 예시는 [전송 문서](3-delivery.md)를 참고한다.
+Iris `type: "markdown"` 입력은 설치 버전에 따라 전송 경로를 선택한다. 26.9 이상에서는 RichText attachment로 변환하고 KakaoTalk 내부 재전송 경로로 발신한다. 이전 버전에서는 Markdown 원문과 `markdown: true` attachment를 기존 Intent로 전송한다. API 입력은 유지한다. 지원 문법과 예시는 [전송 문서](3-delivery.md)를 참고한다.
 
 같은 26.9.1 APK에서 추가로 확인한 근거:
 
@@ -104,7 +104,7 @@ Iris `type: "markdown"` 입력을 RichText attachment로 변환하고 KakaoTalk 
 - `ChatSendingLogRequest.d0`는 `ChatSendingLog.H(room)`으로 얻은 attachment 문자열을 `rk70.S0`의 내부 LOCO WRITE 요청에 전달한다. `H`는 텍스트의 기존 attachment를 보존한다.
 - Noa는 실행 중인 앱의 `versionName`과 sending-log의 RichText 반환형을 검사한 뒤 대기 행을 등록하고, 기존 `Resend` 호출과 `client_message_id` 기반 DB 확인을 사용한다. 비후킹 모드에서는 거부한다.
 
-검증 범위는 UTF-16 서식 변환, sending-log 입력 생성, 비후킹 모드 거부, 버전 경계 및 RichText 모델 검사다. 4,096개 문법/Unicode 조합에서 유효한 UTF-16 범위를 생성하는 것도 검사한다. 실제 Android 수신·서식 표시 확인은 미실시다.
+검증 범위는 UTF-16 서식 변환, sending-log 입력 생성, 패키지 버전 추출, 버전별 전송 분기 및 RichText 모델 검사다. 구버전은 후킹 상태와 무관하게 Intent를 선택하며, 지원 버전의 후킹 오류나 버전 조회 실패는 구버전으로 간주하지 않는다. 4,096개 문법/Unicode 조합에서 유효한 UTF-16 범위를 생성하는 것도 검사한다. 실제 Android 수신·서식 표시 확인은 미실시다.
 
 
 ## LOCO 직접 발신 API 추가

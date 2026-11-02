@@ -13,6 +13,10 @@ pub enum Outbound<'a> {
         mime: &'a str,
         title: Option<&'a str>,
     },
+    LegacyMarkdown {
+        room_id: i64,
+        text: &'a str,
+    },
 }
 
 pub enum Delivery {
@@ -42,7 +46,32 @@ pub fn assemble<'local>(
             mime,
             title,
         } => files(env, room_id, uris, mime, title),
+        Outbound::LegacyMarkdown { room_id, text } => legacy_markdown(env, room_id, text),
     }
+}
+
+fn legacy_markdown<'local>(
+    env: &mut Env<'local>,
+    room_id: i64,
+    text: &str,
+) -> jni::errors::Result<PreparedEnvelope<'local>> {
+    let mut draft = IntentDraft::blank(env)?;
+    draft.package("com.kakao.talk")?;
+    draft.component("com.kakao.talk.activity.RecentExcludeIntentFilterActivity")?;
+    draft.action("android.intent.action.SEND")?;
+    draft.kind("text/plain")?;
+    draft.text("android.intent.extra.TEXT", text)?;
+    draft.text("EXTRA_CHAT_MESSAGE", text)?;
+    draft.text("EXTRA_CHAT_ATTACHMENT", r#"{"markdown":true}"#)?;
+    draft.integer("EXTRA_CHAT_MESSAGE_TYPE_VALUE", 1)?;
+    draft.number("key_id", room_id)?;
+    draft.integer("key_type", 1)?;
+    draft.switch("key_from_direct_share", true)?;
+    draft.flags(0x1000_0000)?;
+    Ok(PreparedEnvelope {
+        value: draft.release(),
+        delivery: Delivery::Foreground("text/plain".to_string()),
+    })
 }
 
 fn words<'local>(

@@ -1216,7 +1216,7 @@ async fn deliver_iris_extension(
 ) -> Result<Option<IrisCustomResult>, NoaError> {
     match request.reply_type.to_ascii_lowercase().as_str() {
         "file" => deliver_iris_file(request, state).await.map(|_| None),
-        "markdown" => deliver_iris_markdown(request, state).await.map(Some),
+        "markdown" => deliver_iris_markdown(request, state).await,
         "custom" => deliver_iris_custom(request, state).await.map(Some),
         reply_type => Err(NoaError::BadRequest(format!(
             "지원하지 않는 Iris reply type입니다: {reply_type}"
@@ -1437,23 +1437,44 @@ fn json_column(
 async fn deliver_iris_markdown(
     request: IrisReplyRequest,
     state: &AppState,
-) -> Result<IrisCustomResult, NoaError> {
-    deliver_iris_custom(markdown_custom_request(request)?, state).await
+) -> Result<Option<IrisCustomResult>, NoaError> {
+    let chat_id = request.room.resolve()?;
+    let text = iris_markdown_text(request.data)?;
+    let version = crate::device::kakao_version().await?;
+    deliver_markdown_for_version(chat_id, text, &version, state).await
 }
 
-fn markdown_custom_request(request: IrisReplyRequest) -> Result<IrisReplyRequest, NoaError> {
-    let text = iris_markdown_text(request.data)?;
-    let message = crate::richtext::RichTextMessage::from_markdown(&text);
-    Ok(IrisReplyRequest {
+async fn deliver_markdown_for_version(
+    chat_id: i64,
+    text: String,
+    version: &str,
+    state: &AppState,
+) -> Result<Option<IrisCustomResult>, NoaError> {
+    if crate::richtext::supported_version(version).map_err(NoaError::AndroidUnavailable)? {
+        deliver_iris_custom(markdown_custom_request(chat_id, &text), state)
+            .await
+            .map(Some)
+    } else {
+        let relay = state.relay.as_ref().ok_or_else(|| {
+            NoaError::AndroidUnavailable("Android JNI 계층이 초기화되지 않았습니다".to_string())
+        })?;
+        relay.deliver_legacy_markdown(chat_id, text).await?;
+        Ok(None)
+    }
+}
+
+fn markdown_custom_request(chat_id: i64, text: &str) -> IrisReplyRequest {
+    let message = crate::richtext::RichTextMessage::from_markdown(text);
+    IrisReplyRequest {
         reply_type: "custom".to_string(),
-        room: request.room,
+        room: IdInput::Number(chat_id),
         data: Some(serde_json::json!({
             "type": 1,
             "message": message.text,
             "attachment": message.attachment(),
         })),
         path: None,
-    })
+    }
 }
 
 fn iris_markdown_text(data: Option<serde_json::Value>) -> Result<String, NoaError> {
@@ -1905,11 +1926,7 @@ mod tests {
 
     #[actix_web::test]
     async fn markdown_uses_text_sending_log_with_utf16_attachment() {
-        let request: IrisReplyRequest = serde_json::from_value(serde_json::json!({
-            "type": "markdown", "room": "123", "data": "**안녕😀** *world*",
-        }))
-        .unwrap();
-        let request = markdown_custom_request(request).unwrap();
+        let request = markdown_custom_request(123, "**안녕😀** *world*");
         assert_eq!(request.reply_type, "custom");
         assert_eq!(request.room.resolve().unwrap(), 123);
         let data: IrisCustomData = serde_json::from_value(request.data.unwrap()).unwrap();
@@ -1969,12 +1986,10 @@ mod tests {
             rooms: Arc::new(RwLock::new(Vec::new())),
             live_events,
         };
-        // With no catalog or relay, RichText must still fail at the hook gate
-        // before touching the DB. Cover both markdown and raw custom inputs.
+        // Raw RichText custom inputs still require a hook before DB access.
         let mut disabled = state.clone();
         Arc::make_mut(&mut disabled.config).kakao_hook_enabled = false;
         for payload in [
-            serde_json::json!({"type":"markdown", "room":"123", "data":"**hello**"}),
             serde_json::json!({"type":"custom", "room":"123", "data":{
                 "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
             }}),
@@ -1988,6 +2003,21 @@ mod tests {
                 .expect("RichText requires the hook");
             assert!(matches!(error, NoaError::AndroidUnavailable(_)));
             assert!(error.to_string().contains("KAKAO_HOOK_ENABLED=true"));
+        }
+        // Select the transport by version, independently of hook readiness.
+        // No catalog/relay is present, so the error identifies the selected path.
+        for (target, version, expected) in [
+            (&disabled, "26.6.3", "Android JNI"),
+            (&state, "26.8.9", "Android JNI"),
+            (&disabled, "26.9.0", "KAKAO_HOOK_ENABLED=true"),
+            (&state, "26.9.1", "후킹 에이전트"),
+            (&disabled, "unknown", "버전을 확인할 수 없습니다"),
+        ] {
+            let error = deliver_markdown_for_version(123, "**hello😀**".to_string(), version, target)
+                .await
+                .err()
+                .expect("no Android transport in this fixture");
+            assert!(error.to_string().contains(expected), "{version}: {error}");
         }
         let app = test::init_service(
             App::new()

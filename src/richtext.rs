@@ -5,6 +5,20 @@ use std::{collections::BTreeMap, ops::Range};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
 
+/// Version selection is independent of hook availability. A hook error must not
+/// make a supported app use the legacy Intent path.
+pub fn supported_version(version: &str) -> Result<bool, String> {
+    let mut parts = version.split('.');
+    let number = |part: Option<&str>| {
+        part.filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|value| value.parse::<i32>().ok())
+    };
+    match (number(parts.next()), number(parts.next())) {
+        (Some(major), Some(minor)) => Ok(major > 26 || (major == 26 && minor >= 9)),
+        _ => Err(format!("KakaoTalk 버전을 확인할 수 없습니다: {version}")),
+    }
+}
+
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct Styles {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -137,6 +151,18 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
+    #[test]
+    fn selects_legacy_markdown_only_before_26_9() {
+        for version in ["25.99.9", "26.6.3", "26.8.9", "026.08.0"] {
+            assert_eq!(supported_version(version), Ok(false), "{version}");
+        }
+        for version in ["26.9.0", "26.9.1", "26.9.9", "26.10.0", "27.0.0"] {
+            assert_eq!(supported_version(version), Ok(true), "{version}");
+        }
+        for version in ["", "unknown", "26", "26.x.1", "-26.9", "26.+9", "99999999999.9"] {
+            assert!(supported_version(version).is_err(), "{version}");
+        }
+    }
     fn check(input: &str, text: &str, styles: Value) {
         let message = RichTextMessage::from_markdown(input);
         assert_eq!(message.text, text);

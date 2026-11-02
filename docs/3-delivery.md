@@ -10,13 +10,14 @@
 |---|---|---|
 | `POST /send` | Android 공유 Intent | Intent 실행 완료 |
 | `POST /send/text` | KakaoTalk 답장 Service Intent | Service 호출 완료 |
-| Iris `markdown` | RichText 변환 후 Kakao 내부 재전송 | DB 이동 확인 |
+| Iris `markdown` (26.9 이상) | RichText 변환 후 Kakao 내부 재전송 | DB 이동 확인 |
+| Iris `markdown` (26.9 미만) | Markdown 원문 + 공유 Intent | Intent 실행 완료 |
 | Iris `file` | 파일 준비 후 공유 Intent | Intent 실행 완료 |
 | Iris `custom` | Kakao 내부 재전송 또는 접근성 재전송 | DB 이동 확인 |
 
 위 표의 Iris 성공 판단은 Noa 내부 처리 기준입니다. Iris `v0.33`의 `/reply` HTTP 응답은 비동기 접수 시점의 `Enqueued`이며, 이후 Noa의 처리 완료나 DB 확인 결과를 포함하지 않습니다.
 
-일반 텍스트·파일은 `KAKAO_HOOK_ENABLED`와 무관하게 Android 프레임워크 Intent를 사용합니다. RichText 전송에는 KakaoTalk 후킹이 필요하며, custom은 후킹 또는 접근성 재전송을 사용합니다.
+일반 텍스트·파일과 구버전 Markdown은 `KAKAO_HOOK_ENABLED`와 무관하게 Android 프레임워크 Intent를 사용합니다. RichText 전송에는 KakaoTalk 후킹이 필요하며, custom은 후킹 또는 접근성 재전송을 사용합니다.
 
 ## 파일 수신과 준비
 
@@ -41,13 +42,17 @@ KakaoTalk이 파일을 읽을 수 있도록 임시 디렉터리와 파일 권한
 
 `POST /send/text`는 KakaoTalk NotificationActionService의 reply Intent를 구성합니다. `threadId`를 제공하면 thread reply 문맥을 포함하고, 없으면 일반 텍스트로 전송합니다. Android 버전별 Binder signature는 시작 시 확인한 뒤 API 26부터 29까지와 API 30 이상의 정확한 메서드를 선택합니다.
 
-Iris `markdown`은 Iris `/reply` 요청을 에이전트가 가로채 Noa 내부 브리지로 넘깁니다. Noa는 대상 Room과 비어 있지 않은 Markdown 문자열을 검증한 후 RichText로 변환합니다.
+Iris `markdown`은 Iris `/reply` 요청을 에이전트가 가로채 Noa 내부 브리지로 넘깁니다. Noa는 대상 Room과 비어 있지 않은 Markdown 문자열을 검증한 후 Android 패키지 정보에서 설치 버전을 조회합니다.
+
+26.9 미만에서는 Markdown 원문을 `android.intent.extra.TEXT`와 `EXTRA_CHAT_MESSAGE`에 넣고, `EXTRA_CHAT_ATTACHMENT`에 `{"markdown":true}`를 지정해 기존 공유 Intent로 전송합니다. 원문의 서식 기호를 제거하거나 RichText 범위로 변환하지 않습니다. KakaoTalk 후킹이 꺼져 있어도 이 경로를 사용할 수 있습니다.
+
+26.9 이상에서는 RichText로 변환해 다음 내부 전송 경로를 사용합니다.
 
 예를 들어 `**안녕** 😀`는 본문 `안녕 😀`, attachment `{"richText":{"bold":[[0,2]]}}`가 됩니다. 이를 텍스트 타입(1)의 `chat_sending_logs` 행으로 저장하고, 후킹 에이전트가 KakaoTalk의 sending manager와 `ChatSendingLogRequest` 재전송 함수를 호출합니다. 앱은 저장된 RichText를 복원해 내부 LOCO 발신 요청에 포함합니다.
 
-RichText의 `bold`, `italic`, `strike` 배열은 각각 `[시작 위치, 길이]` 쌍이며 Java 문자열의 UTF-16 단위로 계산합니다. 동일 서식의 겹치거나 이어진 범위는 합칩니다. CommonMark 파서로 중첩·이스케이프를 처리하고 취소선 확장을 사용합니다. 코드 안의 문법은 서식으로 해석하지 않으며, 지원 범위 밖인 제목·목록·링크·코드 표기는 원문으로 유지합니다. 공백과 줄바꿈도 유지합니다. 기존 `markdown: true` 플래그는 제거했습니다.
+RichText의 `bold`, `italic`, `strike` 배열은 각각 `[시작 위치, 길이]` 쌍이며 Java 문자열의 UTF-16 단위로 계산합니다. 동일 서식의 겹치거나 이어진 범위는 합칩니다. CommonMark 파서로 중첩·이스케이프를 처리하고 취소선 확장을 사용합니다. 코드 안의 문법은 서식으로 해석하지 않으며, 지원 범위 밖인 제목·목록·링크·코드 표기는 원문으로 유지합니다. 공백과 줄바꿈도 유지합니다.
 
-RichText는 카카오톡 26.9.x부터 지원합니다. DB 기록 전에 실행 중인 앱의 버전과 sending-log RichText 모델을 검사합니다. 이전 버전, 알 수 없는 버전, 모델 불일치 또는 비후킹 모드에서는 오류를 반환합니다. RichText를 포함한 `custom` 요청에도 같은 검사를 적용합니다.
+RichText는 카카오톡 26.9.x부터 지원합니다. DB 기록 전에 실행 중인 앱의 버전과 sending-log RichText 모델을 검사합니다. 지원 버전의 후킹 오류나 모델 불일치는 오류로 반환하며, 구버전 Intent 경로로 재시도하지 않습니다. 버전을 조회하거나 판별하지 못한 경우에도 전송하지 않습니다. RichText를 직접 포함한 `custom` 요청은 지원 버전과 후킹이 필요합니다.
 
 공유 Intent는 RichText 전송에 사용하지 않습니다. 현재 경로는 26.9.1 APK 분석으로 확인했으며, 실제 수신 및 화면 표시는 테스트 기기가 없어 미검증입니다.
 

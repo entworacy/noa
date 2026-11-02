@@ -19,6 +19,8 @@ mod accessibility;
 mod envelope;
 #[cfg(any(target_os = "android", test))]
 mod framework;
+mod package;
+pub use package::kakao_version;
 #[cfg(any(target_os = "android", test))]
 mod queue;
 #[cfg(any(target_os = "android", test))]
@@ -86,6 +88,16 @@ impl KakaoRelay {
 
     #[cfg(not(target_os = "android"))]
     pub async fn deliver_text(&self, _: i64, _: String, _: Option<i64>) -> Result<(), NoaError> {
+        unavailable()
+    }
+
+    #[cfg(target_os = "android")]
+    pub async fn deliver_legacy_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
+        self.queue.deliver_legacy_markdown(room_id, text).await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn deliver_legacy_markdown(&self, _: i64, _: String) -> Result<(), NoaError> {
         unavailable()
     }
 

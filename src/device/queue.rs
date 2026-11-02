@@ -26,6 +26,10 @@ enum Job {
         text: String,
         thread_id: Option<i64>,
     },
+    LegacyMarkdown {
+        room_id: i64,
+        text: String,
+    },
 }
 
 struct Ticket {
@@ -74,6 +78,10 @@ impl OutboundQueue {
             thread_id,
         })
         .await
+    }
+
+    pub async fn deliver_legacy_markdown(&self, room_id: i64, text: String) -> Result<(), NoaError> {
+        self.submit(Job::LegacyMarkdown { room_id, text }).await
     }
 
     async fn submit(&self, job: Job) -> Result<(), NoaError> {
@@ -182,6 +190,13 @@ fn execute(
                 },
             )?
         }
+        Job::LegacyMarkdown { room_id, text } => envelope::assemble(
+            env,
+            Outbound::LegacyMarkdown {
+                room_id,
+                text: &text,
+            },
+        )?,
     };
     channel.transmit(env, prepared)
 }
