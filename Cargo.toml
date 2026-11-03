@@ -1,6 +1,6 @@
 [package]
 name = "noa"
-version = "1.4.4"
+version = "1.4.5"
 edition = "2024"
 license-file = "LICENSE"
 description = "Android-native KakaoTalk room dashboard and media sender"
