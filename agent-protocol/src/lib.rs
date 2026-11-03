@@ -35,7 +35,6 @@ impl Channel {
             | "require-richtext"
             | "send-custom"
             | "kick-member"
-            | "kick-left-member"
             | "hide-message"
             | "chat-on-room"
             | "load-open-chat-member"

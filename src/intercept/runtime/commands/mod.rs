@@ -29,9 +29,7 @@ enum KakaoAction {
     },
     KickMember {
         user_id: i64,
-    },
-    KickLeftMember {
-        user_id: i64,
+        member_present: bool,
     },
     HideMessage {
         log_id: i64,
@@ -100,7 +98,6 @@ impl KakaoAction {
             Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
             Self::KickMember { .. } => "참여자 강퇴",
-            Self::KickLeftMember { .. } => "퇴장 사용자 강퇴",
             Self::HideMessage { .. } => "메시지 가리기",
             Self::ChatOnRoom => "CHATONROOM",
             Self::LoadOpenChatMember { .. } => "오픈채팅 멤버 프로필 조회",
@@ -164,28 +161,18 @@ pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), NoaError> {
     Ok(())
 }
 
-pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
-    kick(room_id, user_id, false).await
-}
-
-pub async fn kick_left_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
-    kick(room_id, user_id, true).await
-}
-
-async fn kick(room_id: i64, user_id: i64, left: bool) -> Result<(), NoaError> {
+pub async fn kick_member(room_id: i64, user_id: i64, member_present: bool) -> Result<(), NoaError> {
     let started_at = unix_timestamp_millis();
     let result = tokio::task::spawn_blocking(move || {
-        let action = if left {
-            KakaoAction::KickLeftMember { user_id }
-        } else {
-            KakaoAction::KickMember { user_id }
-        };
-        send_command_blocking(room_id, action)
+        send_command_blocking(room_id, KakaoAction::KickMember {
+            user_id,
+            member_present,
+        })
     })
     .await
     .map_err(|error| NoaError::Internal(error.to_string()))?;
     match result {
-        Ok(_) if left => {
+        Ok(_) if !member_present => {
             let deadline = Instant::now() + Duration::from_millis(500);
             loop {
                 if let Some(result) =

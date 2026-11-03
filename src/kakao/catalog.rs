@@ -668,7 +668,8 @@ impl RoomCatalog {
         )))
     }
 
-    pub fn validate_left_kick_target(&self, chat_id: i64, user_id: i64) -> Result<(), NoaError> {
+    /// Returns current membership after validating a kick target.
+    pub fn validate_kick_target(&self, chat_id: i64, user_id: i64) -> Result<bool, NoaError> {
         if self.current_user_id <= 0 {
             return Err(NoaError::Database(
                 "현재 사용자 ID를 확인하지 못했습니다".to_string(),
@@ -680,12 +681,7 @@ impl RoomCatalog {
             ));
         }
         self.open_chat_link_id(chat_id)?;
-        if self.room_has_member(chat_id, user_id)? {
-            return Err(NoaError::Conflict(
-                "현재 참여 중인 사용자는 /kick API를 사용하세요".to_string(),
-            ));
-        }
-        Ok(())
+        self.room_has_member(chat_id, user_id)
     }
 
     fn open_chat_link_id(&self, chat_id: i64) -> Result<i64, NoaError> {
@@ -1312,7 +1308,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn validates_departed_kick_targets_without_a_member_record() {
+    fn validates_kick_targets_and_detects_current_membership() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("ATTACH ':memory:' AS db1;
             CREATE TABLE db1.chat_rooms (id INTEGER PRIMARY KEY, link_id INTEGER, active_member_ids TEXT, v TEXT);
@@ -1326,14 +1322,14 @@ mod tests {
             has_user_database: false,
             has_profile_database: false,
         };
-        assert!(catalog.validate_left_kick_target(10, 300).is_ok());
-        assert!(matches!(catalog.validate_left_kick_target(10, 100), Err(NoaError::BadRequest(_))));
-        assert!(matches!(catalog.validate_left_kick_target(10, 200), Err(NoaError::Conflict(_))));
-        assert!(matches!(catalog.validate_left_kick_target(11, 300), Err(NoaError::BadRequest(_))));
-        assert!(matches!(catalog.validate_left_kick_target(12, 300), Err(NoaError::Database(_))));
-        assert!(matches!(catalog.validate_left_kick_target(99, 300), Err(NoaError::NotFound(_))));
+        assert!(!catalog.validate_kick_target(10, 300).unwrap());
+        assert!(matches!(catalog.validate_kick_target(10, 100), Err(NoaError::BadRequest(_))));
+        assert!(catalog.validate_kick_target(10, 200).unwrap());
+        assert!(matches!(catalog.validate_kick_target(11, 300), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.validate_kick_target(12, 300), Err(NoaError::Database(_))));
+        assert!(matches!(catalog.validate_kick_target(99, 300), Err(NoaError::NotFound(_))));
         catalog.current_user_id = 0;
-        assert!(matches!(catalog.validate_left_kick_target(10, 300), Err(NoaError::Database(_))));
+        assert!(matches!(catalog.validate_kick_target(10, 300), Err(NoaError::Database(_))));
     }
 
     #[test]

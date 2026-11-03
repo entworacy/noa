@@ -30,7 +30,6 @@ use crate::{
 };
 
 mod iris_endpoint;
-mod kick_left;
 mod loco;
 mod vox;
 mod vox_audio;
@@ -61,10 +60,6 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/api/rooms/{chat_id}", web::get().to(room))
         .route("/api/rooms/{chat_id}/leave", web::post().to(leave_chat))
         .route("/api/rooms/{chat_id}/kick", web::post().to(kick_member))
-        .route(
-            "/api/rooms/{chat_id}/kick-left",
-            web::post().to(kick_left::endpoint),
-        )
         .route(
             "/api/rooms/{chat_id}/messages/{log_id}/hide",
             web::post().to(hide_message),
@@ -651,9 +646,6 @@ pub(super) async fn kick_member_action(
     body: KickMemberRequest,
     state: &AppState,
 ) -> Result<serde_json::Value, NoaError> {
-    let relay = state.relay.clone().ok_or_else(|| {
-        NoaError::AndroidUnavailable("Android JNI 계층이 초기화되지 않았습니다".to_string())
-    })?;
     let chat_id = parse_chat_id(&chat_id)?;
     let user_id = parse_kick_user_id(body.user_id)?;
     let nickname = parse_kick_nickname(body.nickname)?;
@@ -669,10 +661,16 @@ pub(super) async fn kick_member_action(
     })?;
     let chat_id_text = chat_id.to_string();
     let target_catalog = catalog.clone();
-    let room = tokio::task::spawn_blocking(move || target_catalog.room_snapshot(chat_id))
-        .await
-        .map_err(|error| NoaError::Internal(format!("강퇴 대상 조회 작업 실패: {error}")))??;
-    let target = resolve_kick_target(&room, user_id.as_deref(), nickname.as_deref())?;
+    let (room, target, member_present) = tokio::task::spawn_blocking(move || {
+        let room = target_catalog.room_snapshot(chat_id)?;
+        let target = resolve_kick_request_target(&room, user_id.as_deref(), nickname.as_deref())?;
+        let target_user_id = target.user_id.parse::<i64>()
+            .map_err(|_| NoaError::BadRequest(format!("올바르지 않은 userId: {}", target.user_id)))?;
+        let member_present = target_catalog.validate_kick_target(chat_id, target_user_id)?;
+        Ok::<_, NoaError>((room, target, member_present))
+    })
+    .await
+    .map_err(|error| NoaError::Internal(format!("강퇴 대상 조회 작업 실패: {error}")))??;
     if target.is_mine
         || target
             .user_id
@@ -684,31 +682,64 @@ pub(super) async fn kick_member_action(
         ));
     }
     if !state.config.kakao_hook_enabled {
+        if !member_present {
+            return Err(NoaError::AndroidUnavailable(
+                "퇴장 사용자 강퇴에는 KakaoTalk 후킹이 필요합니다".to_string(),
+            ));
+        }
         ensure_accessibility_target_is_unique(&room, &target)?;
     }
     let target_user_id = target
         .user_id
         .parse::<i64>()
         .map_err(|_| NoaError::BadRequest(format!("올바르지 않은 userId: {}", target.user_id)))?;
+    let relay = state.relay.clone().ok_or_else(|| {
+        NoaError::AndroidUnavailable("Android JNI 계층이 초기화되지 않았습니다".to_string())
+    })?;
     relay
         .kick_member(
             chat_id,
             room.name.clone(),
             target.nickname.clone(),
             target_user_id,
+            member_present,
         )
         .await?;
-    verify_kick_postcondition(catalog, state, chat_id, target_user_id).await?;
-    Ok(serde_json::json!({
+    if member_present {
+        verify_kick_postcondition(catalog, state, chat_id, target_user_id).await?;
+    }
+    let mut response = serde_json::json!({
         "ok": true,
         "verified": true,
-        "verification": "database",
+        "verification": if member_present { "database" } else { "loco-response" },
         "chatId": chat_id_text,
         "roomName": room.name,
         "userId": target.user_id,
         "nickname": target.nickname,
-        "message": "참여자 강퇴를 완료했습니다"
-    }))
+        "message": "강퇴 처리를 완료했습니다"
+    });
+    if !member_present {
+        response["serverConfirmed"] = serde_json::Value::Bool(true);
+    }
+    Ok(response)
+}
+
+fn resolve_kick_request_target(
+    room: &Room,
+    user_id: Option<&str>,
+    nickname: Option<&str>,
+) -> Result<Member, NoaError> {
+    if let Some(user_id) = user_id
+        && !room.members.iter().any(|member| member.user_id == user_id)
+    {
+        // An explicit ID remains usable after departure. Do not invent a profile
+        // or treat a caller-supplied nickname as verified member information.
+        return Ok(Member {
+            user_id: user_id.to_string(),
+            ..Member::default()
+        });
+    }
+    resolve_kick_target(room, user_id, nickname)
 }
 
 fn ensure_accessibility_target_is_unique(room: &Room, target: &Member) -> Result<(), NoaError> {
@@ -1726,6 +1757,24 @@ mod tests {
     use super::*;
 
     #[actix_web::test]
+    async fn kick_ids_remain_usable_after_departure() {
+        let mut room = Room {
+            chat_id: "10".into(),
+            members: vec![Member { user_id: "200".into(), nickname: "member".into(), ..Member::default() }],
+            ..Room::default()
+        };
+        assert_eq!(resolve_kick_request_target(&room, Some("200"), None).unwrap().nickname, "member");
+        assert!(resolve_kick_request_target(&room, Some("200"), Some("wrong")).is_err());
+        room.members.clear();
+        let departed = resolve_kick_request_target(&room, Some("200"), Some("old name")).unwrap();
+        assert_eq!(departed.user_id, "200");
+        assert!(departed.nickname.is_empty());
+        assert!(resolve_kick_request_target(&room, None, Some("member")).is_err());
+        // Profile lookup retains its existing current-member requirement.
+        assert!(resolve_kick_target(&room, Some("200"), None).is_err());
+    }
+
+    #[actix_web::test]
     async fn resolves_kick_target_by_nickname_or_user_id() {
         let room = Room {
             chat_id: "100".to_string(),
@@ -1994,10 +2043,6 @@ mod tests {
         // Raw RichText custom inputs still require a hook before DB access.
         let mut disabled = state.clone();
         Arc::make_mut(&mut disabled.config).kakao_hook_enabled = false;
-        let left_error = kick_left::action("123".into(), serde_json::from_value(
-            serde_json::json!({"userId": "456"})
-        ).unwrap(), &disabled).await.unwrap_err();
-        assert!(matches!(left_error, NoaError::AndroidUnavailable(_)));
         for payload in [
             serde_json::json!({"type":"custom", "room":"123", "data":{
                 "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
@@ -2028,6 +2073,31 @@ mod tests {
                 .expect("no Android transport in this fixture");
             assert!(error.to_string().contains(expected), "{version}: {error}");
         }
+        let kick_path = directory.path().join("kick-fixture");
+        std::fs::create_dir_all(kick_path.join("databases")).unwrap();
+        let kick_db = rusqlite::Connection::open(kick_path.join("databases/KakaoTalk.db")).unwrap();
+        kick_db.execute_batch(r#"
+            CREATE TABLE chat_rooms (id INTEGER PRIMARY KEY, link_id INTEGER, active_member_ids TEXT);
+            INSERT INTO chat_rooms VALUES (123, 77, '[100,200]');
+            CREATE TABLE chat_logs (_id INTEGER, user_id INTEGER, v TEXT);
+            INSERT INTO chat_logs VALUES (1, 100, '{"isMine":true}');
+        "#).unwrap();
+        let mut kick_state = disabled.clone();
+        Arc::make_mut(&mut kick_state.config).kakao_path = Some(kick_path);
+        kick_state.catalog = Some(Arc::new(RoomCatalog::mount(&kick_state.config).unwrap()));
+        let payload = serde_json::json!({"userId": "200"});
+        let active_error = kick_member_action("123".into(), serde_json::from_value(payload.clone()).unwrap(), &kick_state)
+            .await.unwrap_err();
+        assert!(active_error.to_string().contains("Android JNI"));
+        kick_db.execute("UPDATE chat_rooms SET active_member_ids = '[100]'", []).unwrap();
+        let departed_error = kick_member_action("123".into(), serde_json::from_value(payload.clone()).unwrap(), &kick_state)
+            .await.unwrap_err();
+        assert!(departed_error.to_string().contains("퇴장 사용자 강퇴에는 KakaoTalk 후킹"));
+        Arc::make_mut(&mut kick_state.config).kakao_hook_enabled = true;
+        let hook_error = kick_member_action("123".into(), serde_json::from_value(payload).unwrap(), &kick_state)
+            .await.unwrap_err();
+        assert!(hook_error.to_string().contains("Android JNI"));
+
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(state))
@@ -2414,14 +2484,14 @@ mod tests {
         );
 
         for (uri, auth_header, token) in [
-            ("/api/rooms/123/kick-left", "Authorization", "Bearer test-token"),
-            ("/internal/iris/endpoint/rooms/123/kick-left", "X-Noa-Hook-Token", "hook-token"),
+            ("/api/rooms/123/kick", "Authorization", "Bearer test-token"),
+            ("/internal/iris/endpoint/rooms/123/kick", "X-Noa-Hook-Token", "hook-token"),
         ] {
             let response = test::call_service(&app, test::TestRequest::post().uri(uri)
                 .set_json(serde_json::json!({"userId": "456"})).to_request()).await;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
             for body in [
-                serde_json::json!({}), serde_json::json!({"nickname": "departed"}),
+                serde_json::json!({}), serde_json::json!({"nickname": ""}),
                 serde_json::json!({"userId": null}), serde_json::json!({"userId": 0}),
                 serde_json::json!({"userId": -1}), serde_json::json!({"userId": 1.5}),
                 serde_json::json!({"userId": "9223372036854775808"}),
@@ -2437,7 +2507,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
 
-        let endpoint_kick_without_android = test::call_service(
+        let endpoint_kick_without_database = test::call_service(
             &app,
             test::TestRequest::post()
                 .uri("/internal/iris/endpoint/rooms/123/kick")
@@ -2447,8 +2517,8 @@ mod tests {
         )
         .await;
         assert_eq!(
-            endpoint_kick_without_android.status(),
-            StatusCode::SERVICE_UNAVAILABLE
+            endpoint_kick_without_database.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
 
         let endpoint_hide_invalid_log = test::call_service(

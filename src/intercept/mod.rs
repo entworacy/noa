@@ -186,25 +186,17 @@ pub async fn send_custom(_: i64, _: i64) -> Result<(), crate::failure::NoaError>
 }
 
 #[cfg(target_os = "android")]
-pub async fn kick_left_member(room_id: i64, user_id: i64) -> Result<(), crate::failure::NoaError> {
-    runtime::kick_left_member(room_id, user_id).await
-}
-
-#[cfg(not(target_os = "android"))]
-pub async fn kick_left_member(_: i64, _: i64) -> Result<(), crate::failure::NoaError> {
-    Err(crate::failure::NoaError::AndroidUnavailable(
-        "KakaoTalk 후킹 강퇴는 Android에서만 사용할 수 있습니다".to_string(),
-    ))
-}
-
-#[cfg(target_os = "android")]
-pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), crate::failure::NoaError> {
-    runtime::kick_member(room_id, user_id).await
+pub async fn kick_member(
+    room_id: i64,
+    user_id: i64,
+    member_present: bool,
+) -> Result<(), crate::failure::NoaError> {
+    runtime::kick_member(room_id, user_id, member_present).await
 }
 
 #[cfg(not(target_os = "android"))]
 #[allow(dead_code)]
-pub async fn kick_member(_: i64, _: i64) -> Result<(), crate::failure::NoaError> {
+pub async fn kick_member(_: i64, _: i64, _: bool) -> Result<(), crate::failure::NoaError> {
     Err(crate::failure::NoaError::AndroidUnavailable(
         "KakaoTalk 후킹 강퇴는 Android에서만 사용할 수 있습니다".to_string(),
     ))
