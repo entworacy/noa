@@ -561,6 +561,18 @@ impl RoomCatalog {
         self.map_room(&connection, raw)
     }
 
+    /// Validates the message in its own room and resolves the optional open-chat link.
+    pub fn reaction_target(&self, chat_id: i64, log_id: i64) -> Result<Option<i64>, NoaError> {
+        if chat_id <= 0 || log_id <= 0 { return Err(NoaError::BadRequest("chatId와 logId는 양수여야 합니다".into())); }
+        let connection = self.lock()?;
+        connection.query_row(
+            "SELECT r.link_id FROM db1.chat_rooms r JOIN db1.chat_logs l ON l.chat_id = r.id WHERE r.id = ?1 AND l.id = ?2 LIMIT 1",
+            params![chat_id, log_id], |row| row.get::<_, Option<i64>>(0)
+        ).optional().map_err(|e| NoaError::Database(format!("리액션 대상 조회 실패: {e}")))?
+            .ok_or_else(|| NoaError::NotFound(format!("채팅방 {chat_id}에서 메시지를 찾을 수 없습니다: {log_id}")))
+            .map(|link| link.filter(|id| *id > 0))
+    }
+
     /// Loads the exact server-side log metadata required by KakaoTalk's
     /// open-chat message hiding operation.
     pub fn hide_message_target(

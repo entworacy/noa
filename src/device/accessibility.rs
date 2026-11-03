@@ -23,8 +23,6 @@ const JOIN_OPEN_CHAT_LABELS: LabelPair = ["오픈채팅 참여하기", "Join Ope
 const SETTINGS_LABELS: LabelPair = ["설정", "Settings"];
 const LEAVE_CHATROOM_LABELS: LabelPair = ["채팅방 나가기", "Leave chatroom"];
 const LEAVE_LABELS: LabelPair = ["나가기", "Leave"];
-const KICK_MEMBER_LABELS: LabelPair = ["대화상대 내보내기", "Send out participant"];
-const REMOVE_LABELS: LabelPair = ["내보내기", "Remove"];
 #[cfg(not(target_os = "android"))]
 const EXPAND_MEMBER_LABELS: LabelPair = ["펼치기", "Expand"];
 #[cfg(not(target_os = "android"))]
@@ -484,83 +482,6 @@ fn select_leave_confirmation(nodes: &[UiNode]) -> Option<Bounds> {
         .and_then(|node| node.bounds)
 }
 
-pub fn kick_member(
-    room_id: i64,
-    profile: i32,
-    room_name: &str,
-    nickname: &str,
-) -> Result<(), NoaError> {
-    open_member_info(room_id, profile, room_name)?;
-    select_member_profile(nickname)?;
-
-    let action_clicked = {
-        #[cfg(target_os = "android")]
-        {
-            match super::ui_agent::click_kick_profile(nickname) {
-                Ok(true) => true,
-                Ok(false) => {
-                    return Err(NoaError::AndroidUnavailable(
-                        "강퇴 권한이 없거나 해당 참여자를 강퇴할 수 없습니다".to_string(),
-                    ));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "프로필 강퇴 버튼 빠른 선택 실패, 화면 덤프로 전환합니다");
-                    false
-                }
-            }
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            false
-        }
-    };
-    if !action_clicked {
-        let action = wait_for(Duration::from_secs(8), |nodes| {
-            // 프로필 이름과 실제 kick label을 함께 확인해 다른 사용자를 누르는 것을 방지한다.
-            let correct_profile = nodes.iter().any(|node| {
-                node.resource_id == "com.kakao.talk.openlink:id/name"
-                    && node.text.trim() == nickname
-            });
-            correct_profile.then(|| {
-                nodes
-                    .iter()
-                    .find(|node| matches_label(node, &KICK_MEMBER_LABELS))
-                    .and_then(|node| node.bounds)
-            })?
-        })
-        .ok_or_else(|| {
-            NoaError::AndroidUnavailable(
-                "강퇴 권한이 없거나 해당 참여자를 강퇴할 수 없습니다".to_string(),
-            )
-        })?;
-        tap_labeled(action, &KICK_MEMBER_LABELS)?;
-    }
-
-    #[cfg(target_os = "android")]
-    match super::ui_agent::click_kick_confirmation() {
-        Ok(true) => return Ok(()),
-        Ok(false) => {}
-        Err(error) => {
-            tracing::warn!(%error, "강퇴 확인 빠른 선택 실패, 화면 덤프로 전환합니다");
-        }
-    }
-
-    let confirmation = wait_for(Duration::from_secs(8), |nodes| {
-        nodes
-            .iter()
-            .find(|node| {
-                node.clickable
-                    && node.class_name.ends_with("Button")
-                    && matches_label(node, &REMOVE_LABELS)
-            })
-            .and_then(|node| node.bounds)
-    })
-    .ok_or_else(|| NoaError::AndroidUnavailable("강퇴 확인 버튼을 찾지 못했습니다".to_string()))?;
-    tap_labeled(confirmation, &REMOVE_LABELS)?;
-    // 실제 성공 여부는 호출자가 KakaoTalk DB의 active_member_ids로 검증한다.
-    Ok(())
-}
-
 fn select_member_profile(nickname: &str) -> Result<(), NoaError> {
     #[cfg(target_os = "android")]
     match super::ui_agent::expand_member_list() {
@@ -882,7 +803,7 @@ fn find_participant(
         }
         if !wait_for_next_probe(deadline) {
             return Err(NoaError::NotFound(format!(
-                "강퇴할 참여자를 찾지 못했습니다: {nickname}"
+                "참여자를 찾지 못했습니다: {nickname}"
             )));
         }
     }
@@ -1268,8 +1189,6 @@ mod tests {
             SETTINGS_LABELS,
             LEAVE_CHATROOM_LABELS,
             LEAVE_LABELS,
-            KICK_MEMBER_LABELS,
-            REMOVE_LABELS,
             EXPAND_MEMBER_LABELS,
             COPY_LABELS,
             PARTICIPANTS_LABELS,

@@ -508,3 +508,12 @@ pub async fn send_loco(
         ))
     }
 }
+
+#[cfg(target_os = "android")]
+pub async fn react_message(room: i64, log: i64, link: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), crate::failure::NoaError> {
+    runtime::react_message(room, log, link, reaction).await
+}
+#[cfg(not(target_os = "android"))]
+pub async fn react_message(_: i64, _: i64, _: Option<i64>, _: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable("메시지 리액션에는 Android KakaoTalk 후킹이 필요합니다".into()))
+}

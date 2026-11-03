@@ -57,6 +57,7 @@ const ACTION_INSTALL_ROOM_WATCHER: i32 = 5;
 const ACTION_VOX: i32 = 6;
 const ACTION_HIDE_MESSAGE: i32 = 7;
 const ACTION_UNBAN: i32 = 8;
+const ACTION_REACT: i32 = 9;
 const KIND_LOCO_SEND: i32 = 1;
 const KIND_LOCO_RECEIVE: i32 = 2;
 const LOG_INFO: c_int = 4;
@@ -411,6 +412,7 @@ unsafe extern "system" fn bridge_dispatch(env: *mut JNIEnv, _: jclass, id: jlong
     let result = match action {
         ACTION_SEND => unsafe { actions::dispatch_send(env, id as u64) },
         ACTION_KICK => unsafe { actions::dispatch_kick(env, id as u64) },
+        ACTION_REACT => unsafe { actions::dispatch_react(env, id as u64) },
         ACTION_UNBAN => unsafe { actions::dispatch_unban(env, id as u64) },
         ACTION_HIDE_MESSAGE => unsafe { actions::dispatch_hide_message(env, id as u64) },
         ACTION_CHATONROOM | ACTION_LOAD_OPEN_CHAT_MEMBER => {

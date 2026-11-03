@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ACTION_CHATONROOM, ACTION_HIDE_MESSAGE, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND,
-    ACTION_VOX, ACTION_UNBAN, actions, packets, post_main, vox, with_env,
+    ACTION_VOX, ACTION_UNBAN, ACTION_REACT, actions, packets, post_main, vox, with_env,
 };
 
 #[derive(Deserialize)]
@@ -16,6 +16,7 @@ pub(crate) struct Request {
     pub(crate) token: String,
     pub(crate) id: u64,
     action: String,
+    reaction: Option<noa_agent_protocol::reaction::ReactionRequest>,
     room: Option<i64>,
     row: Option<i64>,
     log: Option<i64>,
@@ -68,6 +69,7 @@ pub(crate) enum Operation {
         user: i64,
         member_present: bool,
     },
+    React { room: i64, log: i64, link: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest },
     Unban {
         link: i64,
         room: i64,
@@ -179,6 +181,7 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         }
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
+        Operation::React { .. } => execute_main(id, &active.state, ACTION_REACT),
         Operation::Unban { .. } => execute_main(id, &active.state, ACTION_UNBAN),
         Operation::HideMessage { .. } => execute_main(id, &active.state, ACTION_HIDE_MESSAGE),
         Operation::ChatOnRoom { .. } => execute_chat_on_room(id, &active.state),
@@ -221,6 +224,14 @@ impl TryFrom<Request> for Operation {
                     })
                 }
                 _ => Err("positive room and user IDs are required".to_string()),
+            },
+            "react-message" => {
+                let reaction = request.reaction.ok_or("reaction is required")?;
+                reaction.validate()?;
+                match (request.room, request.log, request.link) {
+                    (Some(room), Some(log), link) if room > 0 && log > 0 && link.is_none_or(|id| id > 0) => Ok(Self::React {room, log, link, reaction}),
+                    _ => Err("positive room, log and optional link IDs are required".into()),
+                }
             },
             "unban-member" => match (request.link, request.room, request.user) {
                 (Some(link), Some(room), Some(user)) if link > 0 && room > 0 && user > 0 => {

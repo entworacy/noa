@@ -32,6 +32,7 @@ use crate::{
 mod iris_endpoint;
 mod loco;
 mod unban;
+mod reaction;
 mod vox;
 mod vox_audio;
 
@@ -61,6 +62,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/api/rooms/{chat_id}", web::get().to(room))
         .route("/api/rooms/{chat_id}/leave", web::post().to(leave_chat))
         .route("/api/rooms/{chat_id}/kick", web::post().to(kick_member))
+        .route("/api/rooms/{chat_id}/messages/{log_id}/reactions", web::post().to(reaction::endpoint))
         .route("/api/rooms/{chat_id}/unban", web::post().to(unban::endpoint))
         .route(
             "/api/rooms/{chat_id}/messages/{log_id}/hide",
@@ -656,6 +658,9 @@ pub(super) async fn kick_member_action(
             "nickname 또는 userId 중 하나가 필요합니다".to_string(),
         ));
     }
+    if !state.config.kakao_hook_enabled {
+        return Err(NoaError::AndroidUnavailable("강퇴에는 KakaoTalk 후킹이 필요합니다".into()));
+    }
     let catalog = state.catalog.clone().ok_or_else(|| {
         NoaError::Database(
             "강퇴 대상과 결과를 검증할 KakaoTalk 데이터베이스가 없습니다".to_string(),
@@ -683,30 +688,11 @@ pub(super) async fn kick_member_action(
             "자기 자신은 강퇴할 수 없습니다".to_string(),
         ));
     }
-    if !state.config.kakao_hook_enabled {
-        if !member_present {
-            return Err(NoaError::AndroidUnavailable(
-                "퇴장 사용자 강퇴에는 KakaoTalk 후킹이 필요합니다".to_string(),
-            ));
-        }
-        ensure_accessibility_target_is_unique(&room, &target)?;
-    }
     let target_user_id = target
         .user_id
         .parse::<i64>()
         .map_err(|_| NoaError::BadRequest(format!("올바르지 않은 userId: {}", target.user_id)))?;
-    let relay = state.relay.clone().ok_or_else(|| {
-        NoaError::AndroidUnavailable("Android JNI 계층이 초기화되지 않았습니다".to_string())
-    })?;
-    relay
-        .kick_member(
-            chat_id,
-            room.name.clone(),
-            target.nickname.clone(),
-            target_user_id,
-            member_present,
-        )
-        .await?;
+    crate::intercept::kick_member(chat_id, target_user_id, member_present).await?;
     if member_present {
         verify_kick_postcondition(catalog, state, chat_id, target_user_id).await?;
     }
@@ -742,22 +728,6 @@ fn resolve_kick_request_target(
         });
     }
     resolve_kick_target(room, user_id, nickname)
-}
-
-fn ensure_accessibility_target_is_unique(room: &Room, target: &Member) -> Result<(), NoaError> {
-    if room
-        .members
-        .iter()
-        .filter(|member| member.nickname == target.nickname)
-        .count()
-        == 1
-    {
-        return Ok(());
-    }
-    Err(NoaError::BadRequest(format!(
-        "접근성 강퇴는 화면에서 userId를 구분할 수 없어 같은 닉네임의 참여자를 강퇴할 수 없습니다: {}",
-        target.nickname
-    )))
 }
 
 fn ensure_accessibility_profile_target_is_unique(
@@ -1809,17 +1779,7 @@ mod tests {
         );
         assert!(resolve_kick_target(&room, Some("20"), Some("지민")).is_err());
         assert!(resolve_kick_target(&room, Some("30"), None).is_err());
-        assert!(ensure_accessibility_target_is_unique(&room, &room.members[0]).is_ok());
 
-        let mut duplicated = room.clone();
-        duplicated.members.push(Member {
-            user_id: "30".to_string(),
-            nickname: "지민".to_string(),
-            ..Member::default()
-        });
-        assert!(
-            ensure_accessibility_target_is_unique(&duplicated, &duplicated.members[0]).is_err()
-        );
     }
 
     #[actix_web::test]
@@ -2050,6 +2010,12 @@ mod tests {
         ).unwrap(), &disabled).await.unwrap_err();
         assert!(matches!(unban_disabled, NoaError::AndroidUnavailable(_)));
         assert!(unban_disabled.to_string().contains("강퇴 해제에는 KakaoTalk 후킹"));
+        let reaction_disabled = reaction::action("123".into(), "300".into(), serde_json::from_value(
+            serde_json::json!({"reactionType":1})).unwrap(), &disabled).await.unwrap_err();
+        assert!(matches!(reaction_disabled, NoaError::AndroidUnavailable(_)));
+        let kick_disabled = kick_member_action("123".into(), serde_json::from_value(
+            serde_json::json!({"userId":"200"})).unwrap(), &disabled).await.unwrap_err();
+        assert!(matches!(kick_disabled, NoaError::AndroidUnavailable(_)));
         for payload in [
             serde_json::json!({"type":"custom", "room":"123", "data":{
                 "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
@@ -2086,8 +2052,8 @@ mod tests {
         kick_db.execute_batch(r#"
             CREATE TABLE chat_rooms (id INTEGER PRIMARY KEY, link_id INTEGER, active_member_ids TEXT);
             INSERT INTO chat_rooms VALUES (123, 77, '[100,200]');
-            CREATE TABLE chat_logs (_id INTEGER, user_id INTEGER, v TEXT);
-            INSERT INTO chat_logs VALUES (1, 100, '{"isMine":true}');
+            CREATE TABLE chat_logs (_id INTEGER, user_id INTEGER, id INTEGER, chat_id INTEGER, v TEXT);
+            INSERT INTO chat_logs VALUES (1, 100, 300, 123, '{"isMine":true}');
         "#).unwrap();
         let mut kick_state = disabled.clone();
         Arc::make_mut(&mut kick_state.config).kakao_path = Some(kick_path);
@@ -2095,21 +2061,29 @@ mod tests {
         let payload = serde_json::json!({"userId": "200"});
         let active_error = kick_member_action("123".into(), serde_json::from_value(payload.clone()).unwrap(), &kick_state)
             .await.unwrap_err();
-        assert!(active_error.to_string().contains("Android JNI"));
+        assert!(matches!(active_error, NoaError::AndroidUnavailable(_)));
         kick_db.execute("UPDATE chat_rooms SET active_member_ids = '[100]'", []).unwrap();
         let departed_error = kick_member_action("123".into(), serde_json::from_value(payload.clone()).unwrap(), &kick_state)
             .await.unwrap_err();
-        assert!(departed_error.to_string().contains("퇴장 사용자 강퇴에는 KakaoTalk 후킹"));
+        assert!(departed_error.to_string().contains("강퇴에는 KakaoTalk 후킹"));
         Arc::make_mut(&mut kick_state.config).kakao_hook_enabled = true;
         let hook_error = kick_member_action("123".into(), serde_json::from_value(payload).unwrap(), &kick_state)
             .await.unwrap_err();
-        assert!(hook_error.to_string().contains("Android JNI"));
+        assert!(hook_error.to_string().contains("Android에서만"));
         let unban_request = || serde_json::from_value(serde_json::json!({"userId": "200"})).unwrap();
         let native_error = unban::action("123".into(), unban_request(), &kick_state).await.unwrap_err();
         assert!(matches!(native_error, NoaError::AndroidUnavailable(_)));
         let missing_room = unban::action("999".into(), unban_request(), &kick_state).await.unwrap_err();
         assert!(matches!(missing_room, NoaError::NotFound(_)));
+        let catalog = kick_state.catalog.as_ref().unwrap();
+        assert_eq!(catalog.reaction_target(123, 300).unwrap(), Some(77));
+        assert!(matches!(catalog.reaction_target(123, 301), Err(NoaError::NotFound(_))));
+        assert!(matches!(catalog.reaction_target(999, 300), Err(NoaError::NotFound(_))));
+        let native_reaction = reaction::action("123".into(), "300".into(), serde_json::from_value(
+            serde_json::json!({"reactionType":1})).unwrap(), &kick_state).await.unwrap_err();
+        assert!(matches!(native_reaction, NoaError::AndroidUnavailable(_)));
         kick_db.execute("UPDATE chat_rooms SET link_id = NULL", []).unwrap();
+        assert_eq!(kick_state.catalog.as_ref().unwrap().reaction_target(123, 300).unwrap(), None);
         let regular_room = unban::action("123".into(), unban_request(), &kick_state).await.unwrap_err();
         assert!(matches!(regular_room, NoaError::BadRequest(_)));
 
@@ -2521,6 +2495,24 @@ mod tests {
                 .insert_header((auth_header, token))
                 .set_json(serde_json::json!({"userId": "9007199254740993"})).to_request()).await;
             // A missing catalog cannot stand in for evidence that a member has left.
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        for (uri, auth_header, token) in [
+            ("/api/rooms/123/messages/300/reactions", "Authorization", "Bearer test-token"),
+            ("/internal/iris/endpoint/rooms/123/messages/300/reactions", "X-Noa-Hook-Token", "hook-token"),
+        ] {
+            let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                .set_json(serde_json::json!({"reactionType":1})).to_request()).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            for body in [serde_json::json!({}), serde_json::json!({"reactionType":0}),
+                serde_json::json!({"reactionType":true}), serde_json::json!({"emoticon":{"type":2,"id":""}})] {
+                let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                    .insert_header((auth_header, token)).set_json(body).to_request()).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            }
+            let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                .insert_header((auth_header, token)).set_json(serde_json::json!({"reactionType":1})).to_request()).await;
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
 

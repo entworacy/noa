@@ -198,6 +198,18 @@ def audit(paths):
             unban_accessors.append((name, result, matches[0][0]))
     require(len(unban_accessors) == 1 and unban_accessors[0][:2] == kick_accessors[0][:2],
             "unique native unban accessor: " + str(unban_accessors))
+    reactions = largest_outer("ReactionManager.kt")
+    basic = [m for m in instance_methods(reactions) if m[2] == "V" and m[1] ==
+             ["I", "J", "J", "Ljava/lang/Long;", "Lkotlin/jvm/functions/Function0;"]]
+    items = [m for m in instance_methods(reactions) if m[2] == "V" and len(m[1]) == 7
+             and m[1][1:] == ["J", "J", "Ljava/lang/Long;", "J", "Ljava/lang/String;", "Lkotlin/jvm/functions/Function0;"]]
+    require(len(basic) == 1, "unique native message reaction operation: " + str(basic))
+    require(len(items) == 1, "unique native emoticon reaction operation: " + str(items))
+    require(any(n == "<init>" and d == "(Ljava/util/List; Ljava/util/List; Ljava/util/List;)V"
+                for n, d, _ in by[items[0][1][0]]["methods"]), "emoticon reaction action list constructor")
+    require(any(n == "<init>" and d == "(I Ljava/lang/String;)V"
+                for n, d, _ in cls("com.kakao.talk.module.emoticon.data.EmoticonReaction")["methods"]),
+            "emoticon reaction item constructor")
     context = cls("kotlin.coroutines.EmptyCoroutineContext")
     require(
         any(

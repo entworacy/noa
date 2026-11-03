@@ -338,7 +338,7 @@ curl -X POST http://127.0.0.1:4000/send \
 
 ### `POST /api/rooms/{chatId}/kick`
 
-오픈채팅 사용자를 강퇴합니다. Noa가 현재 참여 여부를 확인해 내부 호출과 결과 검증 방식을 자동으로 선택합니다. 요청 형식은 동일하며 별도의 상태 옵션은 필요하지 않습니다.
+오픈채팅 사용자를 강퇴합니다. KakaoTalk 후킹이 필수이며, Noa가 현재 참여 여부를 확인해 내부 호출과 결과 검증 방식을 자동으로 선택합니다. 요청 형식은 동일하며 별도의 상태 옵션은 필요하지 않습니다.
 
 `userId`는 현재 참여 중이거나 이미 나간 사용자 모두 지정할 수 있습니다. `nickname` 검색은 현재 참여자 목록을 사용하며, 같은 닉네임이 여러 명이면 `userId`가 필요합니다. 자기 자신은 대상이 될 수 없습니다.
 
@@ -361,7 +361,29 @@ curl -X POST http://127.0.0.1:4000/send \
 
 현재 참여자는 강퇴 후 DB에서 대상 ID 제거를 확인합니다. 이미 나간 사용자는 멤버 조회 없이 내부 강퇴 함수를 호출하고, 성공 콜백과 대응하는 KICKMEM 서버 응답을 확인합니다. 이 경우 `verification`은 `loco-response`, `serverConfirmed`는 `true`이며, 현재 프로필을 조회할 수 없는 대상의 `nickname`은 빈 문자열입니다. 요청에 `nickname`을 함께 넣어도 조회할 수 없는 프로필 정보로 채우지 않습니다. 목록에 없다는 사실만으로 강퇴 성공을 판정하지 않습니다.
 
-서버의 권한 또는 대상 조건 거부는 `403`과 KICKMEM 응답의 `status`, `errMsg`를 반환합니다. 서버 응답을 확인하지 못하면 `409`를 반환하며, 재시도 전에 강퇴 목록을 확인합니다. 이미 나간 사용자를 처리하려면 KakaoTalk 후킹이 필요하고, 비활성화 상태에서는 `503`을 반환합니다.
+서버의 권한 또는 대상 조건 거부는 `403`과 KICKMEM 응답의 `status`, `errMsg`를 반환합니다. 서버 응답을 확인하지 못하면 `409`를 반환하며, 재시도 전에 강퇴 목록을 확인합니다. 강퇴 처리는 내부 후킹으로만 수행하며, 후킹 비활성화 상태에서는 `503`을 반환합니다.
+
+### `POST /api/rooms/{chatId}/messages/{logId}/reactions`
+
+메시지에 기본 리액션 또는 이모티콘 리액션을 추가합니다. KakaoTalk 후킹이 필요합니다. 메시지가 지정한 방에 속하는지 DB에서 확인하며, 오픈채팅의 링크 ID도 DB에서 조회합니다. 다음 두 요청 중 하나를 사용합니다.
+
+```json
+{"reactionType":1}
+```
+
+`reactionType`은 카카오톡 기본 리액션 코드 `1`부터 `6`까지의 정수입니다.
+
+```json
+{"emoticon":{"type":1,"id":"item-id"}}
+```
+
+`emoticon.type`은 일반 이모티콘 리액션 `1`, 미니 이모티콘 `2`입니다. `id`는 카카오톡 이모티콘 항목 ID이며 임의의 Unicode 이모지 문자열이 아닙니다. 사용 권한과 지원 여부는 카카오톡 서버가 판정합니다. 두 선택자를 함께 보내거나 빈 항목 ID를 보내면 `400`을 반환합니다.
+
+```json
+{"ok":true,"accepted":true,"verified":false,"verification":"native-callback","chatId":"123","logId":"456"}
+```
+
+내부 성공 콜백 이후에 응답하며, 최종 DB 반영은 별도로 검증하지 않습니다. 후킹 비활성화는 `503`, 해당 방에 메시지가 없으면 `404`입니다. 내부 오류나 콜백 시간 초과는 실패로 반환하며, 재시도 전에 실제 메시지의 리액션을 확인합니다.
 
 ### `POST /api/rooms/{chatId}/unban`
 
@@ -560,6 +582,7 @@ Noa 내부 브리지의 RichText `markdown`과 `custom` 처리 완료 결과:
 | `POST` | `/noa/open-chat/profiles/share-member` | `POST /api/open-chat/profiles/share-member` |
 | `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
 | `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
+| `POST` | `/noa/rooms/{chatId}/messages/{logId}/reactions` | `POST /api/rooms/{chatId}/messages/{logId}/reactions` |
 | `POST` | `/noa/rooms/{chatId}/unban` | `POST /api/rooms/{chatId}/unban` |
 | `POST` | `/noa/rooms/{chatId}/messages/{logId}/hide` | `POST /api/rooms/{chatId}/messages/{logId}/hide` |
 | `POST` | `/noa/rooms/{chatId}/leave` | `POST /api/rooms/{chatId}/leave` |

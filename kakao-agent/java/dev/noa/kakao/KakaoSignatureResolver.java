@@ -36,6 +36,11 @@ public final class KakaoSignatureResolver {
         }
     }
 
+    public static void react(long room, long log, long link, long command,
+            int reactionType, int emoticonType, String emoticonId) throws Exception {
+        KakaoReactionResolver.react(room, log, link, command, reactionType, emoticonType, emoticonId);
+    }
+
     public static void unban(long linkId, long roomId, long userId, long commandId)
             throws Exception {
         KakaoUnbanResolver.unban(linkId, roomId, userId, commandId);

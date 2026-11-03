@@ -25,6 +25,7 @@ const TARGET_SOURCES: &[&str] = &[
     "ChatRoomApiHelper.kt",
     "OpenChatMemberRepository.kt",
     "OlkManager.kt",
+    "ReactionManager.kt",
     "FeedType.kt",
     "OlkOpenProfileRepository.kt",
     "ConnectionOpenLinkJoin.kt",

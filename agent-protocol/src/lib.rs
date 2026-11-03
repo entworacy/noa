@@ -1,5 +1,6 @@
 //! Wire-level channel ownership shared by the host and injected Kakao agent.
 pub mod loco;
+pub mod reaction;
 
 pub const VERSION: u8 = 2;
 
@@ -36,6 +37,7 @@ impl Channel {
             | "send-custom"
             | "kick-member"
             | "unban-member"
+            | "react-message"
             | "hide-message"
             | "chat-on-room"
             | "load-open-chat-member"

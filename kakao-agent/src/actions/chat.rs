@@ -145,3 +145,18 @@ pub(crate) unsafe fn dispatch_hide_message(env: *mut JNIEnv, id: u64) -> Result<
     };
     Ok(())
 }
+
+pub(crate) unsafe fn dispatch_react(env: *mut JNIEnv, id: u64) -> Result<(), String> {
+    let Operation::React { room, log, link, reaction } = command_operation(id)? else {
+        return Err("reaction command state mismatch".into());
+    };
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let (kind, item) = if let Some(item) = reaction.emoticon {
+        (item.r#type, unsafe { crate::new_string(env, &item.id)? })
+    } else { (0, ptr::null_mut()) };
+    unsafe { call_static_void(env, resolver, "react", "(JJJJIILjava/lang/String;)V", &[
+        long_value(room), long_value(log), long_value(link.unwrap_or(0)), long_value(id as i64),
+        crate::int_value(reaction.reaction_type.unwrap_or(0)), crate::int_value(kind), object_value(item),
+    ])? };
+    Ok(())
+}
