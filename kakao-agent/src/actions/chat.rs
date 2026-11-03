@@ -80,8 +80,9 @@ pub(crate) unsafe fn dispatch_send(env: *mut JNIEnv, id: u64) -> Result<(), Stri
 
 pub(crate) unsafe fn dispatch_kick(env: *mut JNIEnv, id: u64) -> Result<(), String> {
     let operation = command_operation(id)?;
-    let Operation::Kick { room, user } = operation else {
-        return Err("kick command state mismatch".to_string());
+    let (room, user, member_present) = match operation {
+        Operation::Kick { room, user, member_present } => (room, user, member_present),
+        _ => return Err("kick command state mismatch".to_string()),
     };
     let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
     unsafe {
@@ -89,9 +90,27 @@ pub(crate) unsafe fn dispatch_kick(env: *mut JNIEnv, id: u64) -> Result<(), Stri
             env,
             resolver,
             "kick",
-            "(JJJ)V",
-            &[long_value(room), long_value(user), long_value(id as i64)],
+            "(JJJZ)V",
+            &[
+                long_value(room),
+                long_value(user),
+                long_value(id as i64),
+                crate::bool_value(member_present),
+            ],
         )?
+    };
+    Ok(())
+}
+
+pub(crate) unsafe fn dispatch_unban(env: *mut JNIEnv, id: u64) -> Result<(), String> {
+    let Operation::Unban { link, room, user } = command_operation(id)? else {
+        return Err("unban command state mismatch".to_string());
+    };
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    unsafe {
+        call_static_void(env, resolver, "unban", "(JJJJ)V", &[
+            long_value(link), long_value(room), long_value(user), long_value(id as i64),
+        ])?
     };
     Ok(())
 }
@@ -124,5 +143,20 @@ pub(crate) unsafe fn dispatch_hide_message(env: *mut JNIEnv, id: u64) -> Result<
             ],
         )?
     };
+    Ok(())
+}
+
+pub(crate) unsafe fn dispatch_react(env: *mut JNIEnv, id: u64) -> Result<(), String> {
+    let Operation::React { room, log, link, reaction } = command_operation(id)? else {
+        return Err("reaction command state mismatch".into());
+    };
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    let (kind, item) = if let Some(item) = reaction.emoticon {
+        (item.r#type, unsafe { crate::new_string(env, &item.id)? })
+    } else { (0, ptr::null_mut()) };
+    unsafe { call_static_void(env, resolver, "react", "(JJJJIILjava/lang/String;)V", &[
+        long_value(room), long_value(log), long_value(link.unwrap_or(0)), long_value(id as i64),
+        crate::int_value(reaction.reaction_type.unwrap_or(0)), crate::int_value(kind), object_value(item),
+    ])? };
     Ok(())
 }

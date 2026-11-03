@@ -161,7 +161,7 @@ final class KakaoRoomResolver {
                 + KakaoReflection.lastFailure(failures));
     }
 
-    private static Method kickMethod(Class<?> foreground, Class<?> room, Class<?> member) {
+    static Method kickMethod(Class<?> foreground, Class<?> room, Class<?> member) {
         Method matched = null;
         for (Method method : KakaoReflection.allMethods(foreground)) {
             Class<?>[] parameters = method.getParameterTypes();

@@ -186,15 +186,31 @@ pub async fn send_custom(_: i64, _: i64) -> Result<(), crate::failure::NoaError>
 }
 
 #[cfg(target_os = "android")]
-pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), crate::failure::NoaError> {
-    runtime::kick_member(room_id, user_id).await
+pub async fn kick_member(
+    room_id: i64,
+    user_id: i64,
+    member_present: bool,
+) -> Result<(), crate::failure::NoaError> {
+    runtime::kick_member(room_id, user_id, member_present).await
 }
 
 #[cfg(not(target_os = "android"))]
 #[allow(dead_code)]
-pub async fn kick_member(_: i64, _: i64) -> Result<(), crate::failure::NoaError> {
+pub async fn kick_member(_: i64, _: i64, _: bool) -> Result<(), crate::failure::NoaError> {
     Err(crate::failure::NoaError::AndroidUnavailable(
         "KakaoTalk 후킹 강퇴는 Android에서만 사용할 수 있습니다".to_string(),
+    ))
+}
+
+#[cfg(target_os = "android")]
+pub async fn unban_member(link_id: i64, room_id: i64, user_id: i64) -> Result<(), crate::failure::NoaError> {
+    runtime::unban_member(link_id, room_id, user_id).await
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn unban_member(_: i64, _: i64, _: i64) -> Result<(), crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable(
+        "KakaoTalk 후킹 강퇴 해제는 Android에서만 사용할 수 있습니다".to_string(),
     ))
 }
 
@@ -491,4 +507,13 @@ pub async fn send_loco(
             "LOCO 송신은 Android에서만 지원합니다".into(),
         ))
     }
+}
+
+#[cfg(target_os = "android")]
+pub async fn react_message(room: i64, log: i64, link: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), crate::failure::NoaError> {
+    runtime::react_message(room, log, link, reaction).await
+}
+#[cfg(not(target_os = "android"))]
+pub async fn react_message(_: i64, _: i64, _: Option<i64>, _: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable("메시지 리액션에는 Android KakaoTalk 후킹이 필요합니다".into()))
 }

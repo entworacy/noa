@@ -357,25 +357,6 @@ pub fn expand_member_list() -> Result<bool, String> {
     }
 }
 
-pub fn click_kick_profile(nickname: &str) -> Result<bool, String> {
-    validate_text(nickname)?;
-    if let Err(error) = ensure_agent() {
-        stop_agent();
-        return Err(error);
-    }
-    match request_with_timeout(
-        &format!("CLICK_KICK_PROFILE {nickname}"),
-        Duration::from_secs(10),
-    ) {
-        Ok(response) if response == "OK" => Ok(true),
-        Ok(response) if response == "NOT_FOUND" => Ok(false),
-        Ok(response) => Err(format!(
-            "UiAutomator 에이전트 프로필 강퇴 선택 실패: {response}"
-        )),
-        Err(error) => Err(error),
-    }
-}
-
 pub fn wait_open_chat_destination(
     timeout: Duration,
 ) -> Result<Option<OpenChatDestination>, String> {
@@ -441,10 +422,6 @@ pub fn click_leave_confirmation() -> Result<bool, String> {
         "채팅방 나가기 확인",
         Duration::from_secs(10),
     )
-}
-
-pub fn click_kick_confirmation() -> Result<bool, String> {
-    click_wait_command("CLICK_KICK_CONFIRM", "강퇴 확인", Duration::from_secs(10))
 }
 
 pub fn wait_for_resource_gone(resource_id: &str, timeout: Duration) -> Result<bool, String> {

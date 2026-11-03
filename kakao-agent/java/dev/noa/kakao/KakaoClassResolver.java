@@ -20,6 +20,7 @@ final class KakaoClassResolver {
         if ("member-repository".equals(role)) {
             return largestOuter("OpenChatMemberRepository.kt");
         }
+        if ("reaction-manager".equals(role)) return largestOuter("ReactionManager.kt");
         if ("open-link-manager".equals(role)) {
             return largestOuter("OlkManager.kt");
         }

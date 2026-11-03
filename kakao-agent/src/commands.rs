@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ACTION_CHATONROOM, ACTION_HIDE_MESSAGE, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND,
-    ACTION_VOX, actions, packets, post_main, vox, with_env,
+    ACTION_VOX, ACTION_UNBAN, ACTION_REACT, actions, packets, post_main, vox, with_env,
 };
 
 #[derive(Deserialize)]
@@ -16,6 +16,7 @@ pub(crate) struct Request {
     pub(crate) token: String,
     pub(crate) id: u64,
     action: String,
+    reaction: Option<noa_agent_protocol::reaction::ReactionRequest>,
     room: Option<i64>,
     row: Option<i64>,
     log: Option<i64>,
@@ -23,6 +24,8 @@ pub(crate) struct Request {
     log_type: Option<i32>,
     message: Option<String>,
     user: Option<i64>,
+    #[serde(rename = "memberPresent")]
+    member_present: Option<bool>,
     link: Option<i64>,
     url: Option<String>,
     #[serde(rename = "profileId")]
@@ -62,6 +65,13 @@ pub(crate) enum Operation {
         row: i64,
     },
     Kick {
+        room: i64,
+        user: i64,
+        member_present: bool,
+    },
+    React { room: i64, log: i64, link: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest },
+    Unban {
+        link: i64,
         room: i64,
         user: i64,
     },
@@ -171,6 +181,8 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         }
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
+        Operation::React { .. } => execute_main(id, &active.state, ACTION_REACT),
+        Operation::Unban { .. } => execute_main(id, &active.state, ACTION_UNBAN),
         Operation::HideMessage { .. } => execute_main(id, &active.state, ACTION_HIDE_MESSAGE),
         Operation::ChatOnRoom { .. } => execute_chat_on_room(id, &active.state),
         Operation::LoadOpenChatMember { .. } => execute_load_open_chat_member(id, &active.state),
@@ -204,8 +216,28 @@ impl TryFrom<Request> for Operation {
                 _ => Err("room and row are required".to_string()),
             },
             "kick-member" => match (request.room, request.user) {
-                (Some(room), Some(user)) => Ok(Self::Kick { room, user }),
-                _ => Err("room and user are required".to_string()),
+                (Some(room), Some(user)) if room > 0 && user > 0 => {
+                    Ok(Self::Kick {
+                        room,
+                        user,
+                        member_present: request.member_present.unwrap_or(true),
+                    })
+                }
+                _ => Err("positive room and user IDs are required".to_string()),
+            },
+            "react-message" => {
+                let reaction = request.reaction.ok_or("reaction is required")?;
+                reaction.validate()?;
+                match (request.room, request.log, request.link) {
+                    (Some(room), Some(log), link) if room > 0 && log > 0 && link.is_none_or(|id| id > 0) => Ok(Self::React {room, log, link, reaction}),
+                    _ => Err("positive room, log and optional link IDs are required".into()),
+                }
+            },
+            "unban-member" => match (request.link, request.room, request.user) {
+                (Some(link), Some(room), Some(user)) if link > 0 && room > 0 && user > 0 => {
+                    Ok(Self::Unban { link, room, user })
+                }
+                _ => Err("positive link, room and user IDs are required".to_string()),
             },
             "hide-message" => {
                 match (request.room, request.log, request.log_type, request.message) {
@@ -416,15 +448,17 @@ fn execute_send(id: u64, state: &CommandState) -> CommandResult {
 }
 
 fn execute_kick(id: u64, state: &CommandState) -> CommandResult {
-    let (room, user) = match state.operation {
-        Operation::Kick { room, user } => (room, user),
+    let (room, user, member_present) = match state.operation {
+        Operation::Kick { room, user, member_present } => (room, user, member_present),
         _ => return Err("kick command state mismatch".to_string()),
     };
     // Refresh the requested member before resolving it from KakaoTalk's
     // in-memory open-chat member repository. The DB row can exist while that
     // repository has not loaded the member yet.
-    with_env(|env| unsafe { packets::send_getmem(env, id, room, user) })?;
-    wait_loaded(state, Duration::from_secs(10))?;
+    if member_present {
+        with_env(|env| unsafe { packets::send_getmem(env, id, room, user) })?;
+        wait_loaded(state, Duration::from_secs(10))?;
+    }
     with_env(|env| unsafe { post_main(env, id, ACTION_KICK) })?;
     wait_result(state, Duration::from_secs(10))
 }
@@ -575,6 +609,31 @@ mod tests {
 
     #[test]
     fn parses_supported_commands() {
+        let unban = request(serde_json::json!({
+            "token": "secret", "id": 12, "action": "unban-member", "link": 7, "room": 10, "user": 20
+        }));
+        assert_eq!(unban.channel(), Some(noa_agent_protocol::Channel::Control));
+        assert!(matches!(Operation::try_from(unban).unwrap(), Operation::Unban { link: 7, room: 10, user: 20 }));
+        for (link, room, user) in [(0, 10, 20), (7, 0, 20), (7, 10, -1)] {
+            assert!(Operation::try_from(request(serde_json::json!({
+                "token": "secret", "id": 12, "action": "unban-member", "link": link, "room": room, "user": user
+            }))).is_err());
+        }
+        for present in [None, Some(true), Some(false)] {
+            let mut body = serde_json::json!({
+                "token": "secret", "id": 9, "action": "kick-member", "room": 10, "user": 20
+            });
+            if let Some(value) = present { body["memberPresent"] = value.into(); }
+            let kick = request(body);
+            assert_eq!(kick.channel(), Some(noa_agent_protocol::Channel::Control));
+            assert!(matches!(Operation::try_from(kick).unwrap(),
+                Operation::Kick { room: 10, user: 20, member_present } if member_present == present.unwrap_or(true)));
+        }
+        for (room, user) in [(0, 20), (10, 0), (-1, 20)] {
+            assert!(Operation::try_from(request(serde_json::json!({
+                "token": "secret", "id": 9, "action": "kick-member", "room": room, "user": user
+            }))).is_err());
+        }
         let probe = request(serde_json::json!({
             "token": "secret", "id": 8, "action": "require-richtext"
         }));

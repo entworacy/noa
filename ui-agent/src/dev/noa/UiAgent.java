@@ -35,7 +35,6 @@ public final class UiAgent extends UiAutomatorTestCase {
     private static final String DUMP_FILE = "noa-accessibility.xml";
     private static final File DUMP_PATH = new File("/data/local/tmp", DUMP_FILE);
     private static final String MEMBER_LIST_ID = "com.kakao.talk:id/recycler_view";
-    private static final String PROFILE_NAME_ID = "com.kakao.talk.openlink:id/name";
     private static final String CHAT_TITLE_ID =
         "com.kakao.talk:id/toolbar_default_title_text";
     private static final String OPEN_CHAT_MESSAGE_ID = "com.kakao.talk:id/txt_message";
@@ -46,9 +45,6 @@ public final class UiAgent extends UiAutomatorTestCase {
     private static final String OPEN_CHAT_PROFILE_NAME_PATTERN =
         "com\\.kakao\\.talk\\.openlink:id/profile_name(?:_res_.*)?";
     private static final String SETTING_BUTTON_ID = "com.kakao.talk:id/setting_button";
-    private static final String[] KICK_LABELS = {
-        "대화상대 내보내기", "Send out participant"
-    };
     private static final String[] RESEND_LABELS = {"재전송", "Re-send"};
     private static final String[] OPEN_PROFILE_MORE_LABELS = {"더보기", "More"};
     private static final String[] COPY_LABELS = {"링크 복사", "Copy Link"};
@@ -59,7 +55,6 @@ public final class UiAgent extends UiAutomatorTestCase {
         "채팅방 나가기", "Leave chatroom"
     };
     private static final String[] LEAVE_LABELS = {"나가기", "Leave"};
-    private static final String[] REMOVE_LABELS = {"내보내기", "Remove"};
     private volatile boolean running = true;
     private int sdkInt;
     private String clipboardSentinel;
@@ -201,15 +196,6 @@ public final class UiAgent extends UiAutomatorTestCase {
         if ("EXPAND_MEMBER_LIST".equals(command)) {
             try {
                 respond(writer, expandMemberList() ? "OK" : "NOT_FOUND");
-            } catch (Throwable error) {
-                respond(writer, "ERR " + singleLine(error.toString()));
-            }
-            return;
-        }
-        if (command != null && command.startsWith("CLICK_KICK_PROFILE ")) {
-            try {
-                String nickname = command.substring("CLICK_KICK_PROFILE ".length());
-                respond(writer, clickKickForProfile(nickname, 8000) ? "OK" : "NOT_FOUND");
             } catch (Throwable error) {
                 respond(writer, "ERR " + singleLine(error.toString()));
             }
@@ -364,14 +350,6 @@ public final class UiAgent extends UiAutomatorTestCase {
         if ("CLICK_LEAVE_CONFIRM".equals(command)) {
             try {
                 respond(writer, waitClickLabels(LEAVE_LABELS, 8000) ? "OK" : "NOT_FOUND");
-            } catch (Throwable error) {
-                respond(writer, "ERR " + singleLine(error.toString()));
-            }
-            return;
-        }
-        if ("CLICK_KICK_CONFIRM".equals(command)) {
-            try {
-                respond(writer, waitClickLabels(REMOVE_LABELS, 8000) ? "OK" : "NOT_FOUND");
             } catch (Throwable error) {
                 respond(writer, "ERR " + singleLine(error.toString()));
             }
@@ -1226,29 +1204,6 @@ public final class UiAgent extends UiAutomatorTestCase {
         return forward
             ? getUiDevice().swipe(x, lower, x, upper, 5)
             : getUiDevice().swipe(x, upper, x, lower, 5);
-    }
-
-    private boolean clickKickForProfile(String nickname, long timeoutMs) throws Exception {
-        if (nickname.isEmpty()) {
-            return false;
-        }
-        long deadline = System.nanoTime() + timeoutMs * 1000000L;
-        do {
-            UiObject profile = new UiObject(
-                new UiSelector().resourceId(PROFILE_NAME_ID).text(nickname)
-            );
-            if (profile.exists()) {
-                UiObject action = firstLabel(KICK_LABELS);
-                if (action != null) {
-                    if (!clickObject(action)) {
-                        throw new IllegalStateException("kick click rejected");
-                    }
-                    return true;
-                }
-            }
-            Thread.sleep(25);
-        } while (System.nanoTime() < deadline);
-        return false;
     }
 
     private UiObject firstLabel(String[] labels) {

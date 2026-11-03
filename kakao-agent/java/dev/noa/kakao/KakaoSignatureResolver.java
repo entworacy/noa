@@ -27,8 +27,23 @@ public final class KakaoSignatureResolver {
     }
 
     /** Performs an open-chat kick using only validated runtime relationships. */
-    public static void kick(long roomId, long userId, long commandId) throws Exception {
-        KakaoRoomResolver.kick(roomId, userId, commandId);
+    public static void kick(long roomId, long userId, long commandId, boolean memberPresent)
+            throws Exception {
+        if (memberPresent) {
+            KakaoRoomResolver.kick(roomId, userId, commandId);
+        } else {
+            KakaoLeftMemberKick.kick(roomId, userId, commandId);
+        }
+    }
+
+    public static void react(long room, long log, long link, long command,
+            int reactionType, int emoticonType, String emoticonId) throws Exception {
+        KakaoReactionResolver.react(room, log, link, command, reactionType, emoticonType, emoticonId);
+    }
+
+    public static void unban(long linkId, long roomId, long userId, long commandId)
+            throws Exception {
+        KakaoUnbanResolver.unban(linkId, roomId, userId, commandId);
     }
 
     /** Dispatches KakaoTalk's open-chat message rewrite (hide) operation. */

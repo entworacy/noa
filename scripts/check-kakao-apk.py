@@ -153,6 +153,63 @@ def audit(paths):
         + ", providers="
         + str(providers),
     )
+    friend = cls("com.kakao.talk.db.model.Friend")
+    friend_id_owner = friend
+    def has_id_accessor(owner):
+        return any(not flags & 8 and desc == "()J" for _, desc, flags in owner["methods"])
+    while not has_id_accessor(friend_id_owner) and friend_id_owner["super"] in by:
+        friend_id_owner = by[friend_id_owner["super"]]
+    require(
+        has(friend, "<init>", "(J Ljava/lang/String; Ljava/lang/String;)V")
+        and has_id_accessor(friend_id_owner),
+        "departed kick Friend ID contract",
+    )
+    olk = largest_outer("OlkManager.kt")
+    kick_accessors = []
+    for name, params, result, flags in instance_methods(olk):
+        if (
+            params
+            or flags & (64 | 4096)
+            or result not in by
+            or by[result]["flags"] & 512
+        ):
+            continue
+        matches = [
+            m
+            for m in instance_methods(by[result])
+            if m[2] == "V"
+            and len(m[1]) == 5
+            and m[1][1:4] == [friend["name"], "Z", "Z"]
+            and m[1][4] in by
+            and by[m[1][4]]["flags"] & 512
+        ]
+        if len(matches) == 1:
+            kick_accessors.append((name, result, matches[0][0]))
+    require(
+        len(kick_accessors) == 1, "unique native kick accessor: " + str(kick_accessors)
+    )
+    unban_accessors = []
+    for name, params, result, flags in instance_methods(olk):
+        if params or flags & (64 | 4096) or result not in by or by[result]["flags"] & 512:
+            continue
+        matches = [m for m in instance_methods(by[result]) if m[2] == "V"
+                   and m[1] == ["J", "J", "J", "Ljava/lang/Runnable;"]]
+        if len(matches) == 1:
+            unban_accessors.append((name, result, matches[0][0]))
+    require(len(unban_accessors) == 1 and unban_accessors[0][:2] == kick_accessors[0][:2],
+            "unique native unban accessor: " + str(unban_accessors))
+    reactions = largest_outer("ReactionManager.kt")
+    basic = [m for m in instance_methods(reactions) if m[2] == "V" and m[1] ==
+             ["I", "J", "J", "Ljava/lang/Long;", "Lkotlin/jvm/functions/Function0;"]]
+    items = [m for m in instance_methods(reactions) if m[2] == "V" and len(m[1]) == 7
+             and m[1][1:] == ["J", "J", "Ljava/lang/Long;", "J", "Ljava/lang/String;", "Lkotlin/jvm/functions/Function0;"]]
+    require(len(basic) == 1, "unique native message reaction operation: " + str(basic))
+    require(len(items) == 1, "unique native emoticon reaction operation: " + str(items))
+    require(any(n == "<init>" and d == "(Ljava/util/List; Ljava/util/List; Ljava/util/List;)V"
+                for n, d, _ in by[items[0][1][0]]["methods"]), "emoticon reaction action list constructor")
+    require(any(n == "<init>" and d == "(I Ljava/lang/String;)V"
+                for n, d, _ in cls("com.kakao.talk.module.emoticon.data.EmoticonReaction")["methods"]),
+            "emoticon reaction item constructor")
     context = cls("kotlin.coroutines.EmptyCoroutineContext")
     require(
         any(

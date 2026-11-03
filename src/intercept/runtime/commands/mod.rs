@@ -29,6 +29,12 @@ enum KakaoAction {
     },
     KickMember {
         user_id: i64,
+        member_present: bool,
+    },
+    ReactMessage { log_id: i64, link_id: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest },
+    UnbanMember {
+        link_id: i64,
+        user_id: i64,
     },
     HideMessage {
         log_id: i64,
@@ -97,6 +103,8 @@ impl KakaoAction {
             Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
             Self::KickMember { .. } => "참여자 강퇴",
+            Self::ReactMessage { .. } => "메시지 리액션",
+            Self::UnbanMember { .. } => "강퇴 해제",
             Self::HideMessage { .. } => "메시지 가리기",
             Self::ChatOnRoom => "CHATONROOM",
             Self::LoadOpenChatMember { .. } => "오픈채팅 멤버 프로필 조회",
@@ -160,14 +168,33 @@ pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), NoaError> {
     Ok(())
 }
 
-pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
+pub async fn kick_member(room_id: i64, user_id: i64, member_present: bool) -> Result<(), NoaError> {
     let started_at = unix_timestamp_millis();
     let result = tokio::task::spawn_blocking(move || {
-        send_command_blocking(room_id, KakaoAction::KickMember { user_id })
+        send_command_blocking(room_id, KakaoAction::KickMember {
+            user_id,
+            member_present,
+        })
     })
     .await
     .map_err(|error| NoaError::Internal(error.to_string()))?;
     match result {
+        Ok(_) if !member_present => {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                if let Some(result) =
+                    crate::intercept::loco::kick_response(room_id, user_id, started_at)
+                {
+                    return result.map_err(NoaError::Forbidden);
+                }
+                if Instant::now() >= deadline {
+                    return Err(NoaError::Conflict(
+                        "강퇴 요청의 KICKMEM 서버 응답을 확인하지 못했습니다. 재시도 전에 강퇴 목록을 확인하세요".to_string(),
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
         Ok(_) => Ok(()),
         Err(error) => {
             if let Some(detail) = wait_for_kick_rejection(room_id, user_id, started_at).await {
@@ -177,6 +204,29 @@ pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
                 Err(error)
             }
         }
+    }
+}
+
+pub async fn unban_member(link_id: i64, room_id: i64, user_id: i64) -> Result<(), NoaError> {
+    let started_at = unix_timestamp_millis();
+    let result = tokio::task::spawn_blocking(move || {
+        send_command_blocking(room_id, KakaoAction::UnbanMember { link_id, user_id })
+    })
+    .await
+    .map_err(|error| NoaError::Internal(error.to_string()))?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if let Some(response) = crate::intercept::loco::unban_response(link_id, room_id, user_id, started_at) {
+            response.map_err(NoaError::Forbidden)?;
+            // A server packet alone must not hide a native callback/transport failure.
+            return result.map(|_| ());
+        }
+        if Instant::now() >= deadline {
+            return result.and_then(|_| Err(NoaError::Conflict(
+                "강퇴 해제 요청의 KLDELITEM 서버 응답을 확인하지 못했습니다. 재시도 전에 강퇴 목록을 확인하세요".to_string(),
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -448,4 +498,10 @@ pub async fn send_loco(
     .ok_or_else(|| NoaError::AndroidUnavailable("LOCO 에이전트 응답이 없습니다".into()))?;
     serde_json::from_str(&value)
         .map_err(|error| NoaError::AndroidUnavailable(format!("LOCO 에이전트 응답 오류: {error}")))
+}
+
+pub async fn react_message(room_id: i64, log_id: i64, link_id: Option<i64>, reaction: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), NoaError> {
+    tokio::task::spawn_blocking(move || send_command_blocking(room_id, KakaoAction::ReactMessage {log_id, link_id, reaction}))
+        .await.map_err(|e| NoaError::Internal(e.to_string()))??;
+    Ok(())
 }

@@ -561,6 +561,18 @@ impl RoomCatalog {
         self.map_room(&connection, raw)
     }
 
+    /// Validates the message in its own room and resolves the optional open-chat link.
+    pub fn reaction_target(&self, chat_id: i64, log_id: i64) -> Result<Option<i64>, NoaError> {
+        if chat_id <= 0 || log_id <= 0 { return Err(NoaError::BadRequest("chatId와 logId는 양수여야 합니다".into())); }
+        let connection = self.lock()?;
+        connection.query_row(
+            "SELECT r.link_id FROM db1.chat_rooms r JOIN db1.chat_logs l ON l.chat_id = r.id WHERE r.id = ?1 AND l.id = ?2 LIMIT 1",
+            params![chat_id, log_id], |row| row.get::<_, Option<i64>>(0)
+        ).optional().map_err(|e| NoaError::Database(format!("리액션 대상 조회 실패: {e}")))?
+            .ok_or_else(|| NoaError::NotFound(format!("채팅방 {chat_id}에서 메시지를 찾을 수 없습니다: {log_id}")))
+            .map(|link| link.filter(|id| *id > 0))
+    }
+
     /// Loads the exact server-side log metadata required by KakaoTalk's
     /// open-chat message hiding operation.
     pub fn hide_message_target(
@@ -666,6 +678,41 @@ impl RoomCatalog {
         Err(NoaError::NotFound(format!(
             "진행 중인 오픈채팅 보이스톡을 찾을 수 없습니다: {chat_id}"
         )))
+    }
+
+    /// Returns current membership after validating a kick target.
+    pub fn validate_kick_target(&self, chat_id: i64, user_id: i64) -> Result<bool, NoaError> {
+        if self.current_user_id <= 0 {
+            return Err(NoaError::Database(
+                "현재 사용자 ID를 확인하지 못했습니다".to_string(),
+            ));
+        }
+        if user_id == self.current_user_id {
+            return Err(NoaError::BadRequest(
+                "자기 자신은 강퇴할 수 없습니다".to_string(),
+            ));
+        }
+        self.open_chat_link_id(chat_id)?;
+        self.room_has_member(chat_id, user_id)
+    }
+
+    pub fn open_chat_link_id(&self, chat_id: i64) -> Result<i64, NoaError> {
+        let connection = self.lock()?;
+        let link_id: Option<Option<i64>> = connection
+            .query_row(
+                "SELECT link_id FROM db1.chat_rooms WHERE id = ?1 LIMIT 1",
+                [chat_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| NoaError::Database(format!("오픈채팅 링크 조회 실패: {error}")))?;
+        match link_id {
+            Some(Some(id)) if id > 0 => Ok(id),
+            Some(_) => Err(NoaError::BadRequest(
+                "오픈채팅방에서만 사용할 수 있습니다".to_string(),
+            )),
+            None => Err(NoaError::NotFound(format!("채팅방을 찾을 수 없습니다: {chat_id}"))),
+        }
     }
 
     /// Reads the authoritative active-member list for one room without rebuilding the
@@ -1271,6 +1318,36 @@ fn now() -> i64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn validates_kick_targets_and_detects_current_membership() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("ATTACH ':memory:' AS db1;
+            CREATE TABLE db1.chat_rooms (id INTEGER PRIMARY KEY, link_id INTEGER, active_member_ids TEXT, v TEXT);
+            INSERT INTO db1.chat_rooms VALUES (10, 77, '[100,200]', '{}'),
+              (11, NULL, '[]', '{}'), (12, 78, 'invalid', '{}');").unwrap();
+        let mut catalog = RoomCatalog {
+            connection: Mutex::new(connection),
+            primary_path: PathBuf::new(),
+            current_user_id: 100,
+            cipher: SealedText::for_owner(100),
+            has_user_database: false,
+            has_profile_database: false,
+        };
+        assert!(!catalog.validate_kick_target(10, 300).unwrap());
+        assert!(matches!(catalog.validate_kick_target(10, 100), Err(NoaError::BadRequest(_))));
+        assert!(catalog.validate_kick_target(10, 200).unwrap());
+        assert!(matches!(catalog.validate_kick_target(11, 300), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.validate_kick_target(12, 300), Err(NoaError::Database(_))));
+        assert!(matches!(catalog.validate_kick_target(99, 300), Err(NoaError::NotFound(_))));
+        catalog.current_user_id = 0;
+        assert!(matches!(catalog.validate_kick_target(10, 300), Err(NoaError::Database(_))));
+        // Unban needs the room's link, independently of current membership/account lookup.
+        assert_eq!(catalog.open_chat_link_id(10).unwrap(), 77);
+        assert_eq!(catalog.open_chat_link_id(12).unwrap(), 78);
+        assert!(matches!(catalog.open_chat_link_id(11), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.open_chat_link_id(99), Err(NoaError::NotFound(_))));
+    }
 
     #[test]
     fn parses_numeric_and_string_member_ids() {

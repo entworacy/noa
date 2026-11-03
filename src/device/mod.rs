@@ -276,38 +276,6 @@ impl KakaoRelay {
     pub async fn leave_chat(&self, _: i64, _: String) -> Result<(), NoaError> {
         unavailable()
     }
-
-    #[cfg(target_os = "android")]
-    pub async fn kick_member(
-        &self,
-        room_id: i64,
-        room_name: String,
-        nickname: String,
-        user_id: i64,
-    ) -> Result<(), NoaError> {
-        if self.kakao_hook_enabled {
-            tracing::info!(room_id, user_id, mode = "hook", "참여자 강퇴 경로 선택");
-            return crate::intercept::kick_member(room_id, user_id).await;
-        }
-        tracing::info!(
-            room_id,
-            user_id,
-            mode = "accessibility",
-            "참여자 강퇴 경로 선택"
-        );
-        let _guard = self.accessibility_lock.lock().await;
-        let profile = self.android_user_id;
-        tokio::task::spawn_blocking(move || {
-            accessibility::kick_member(room_id, profile, &room_name, &nickname)
-        })
-        .await
-        .map_err(|error| NoaError::AndroidUnavailable(error.to_string()))?
-    }
-
-    #[cfg(not(target_os = "android"))]
-    pub async fn kick_member(&self, _: i64, _: String, _: String, _: i64) -> Result<(), NoaError> {
-        unavailable()
-    }
 }
 
 #[cfg(target_os = "android")]
