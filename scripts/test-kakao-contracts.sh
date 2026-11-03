@@ -11,3 +11,4 @@ javac --release 8 -d "$build_dir" \
   "$fixture_dir/ContractTest.java"
 java -cp "$build_dir" dev.noa.kakao.ContractTest
 python3 "$project_dir/kakao-agent/tests/kick_left_compat.py"
+python3 "$project_dir/kakao-agent/tests/unban_compat.py"

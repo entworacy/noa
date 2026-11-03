@@ -31,6 +31,7 @@ use crate::{
 
 mod iris_endpoint;
 mod loco;
+mod unban;
 mod vox;
 mod vox_audio;
 
@@ -60,6 +61,7 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/api/rooms/{chat_id}", web::get().to(room))
         .route("/api/rooms/{chat_id}/leave", web::post().to(leave_chat))
         .route("/api/rooms/{chat_id}/kick", web::post().to(kick_member))
+        .route("/api/rooms/{chat_id}/unban", web::post().to(unban::endpoint))
         .route(
             "/api/rooms/{chat_id}/messages/{log_id}/hide",
             web::post().to(hide_message),
@@ -2043,6 +2045,11 @@ mod tests {
         // Raw RichText custom inputs still require a hook before DB access.
         let mut disabled = state.clone();
         Arc::make_mut(&mut disabled.config).kakao_hook_enabled = false;
+        let unban_disabled = unban::action("123".into(), serde_json::from_value(
+            serde_json::json!({"userId": "456"})
+        ).unwrap(), &disabled).await.unwrap_err();
+        assert!(matches!(unban_disabled, NoaError::AndroidUnavailable(_)));
+        assert!(unban_disabled.to_string().contains("강퇴 해제에는 KakaoTalk 후킹"));
         for payload in [
             serde_json::json!({"type":"custom", "room":"123", "data":{
                 "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
@@ -2097,6 +2104,14 @@ mod tests {
         let hook_error = kick_member_action("123".into(), serde_json::from_value(payload).unwrap(), &kick_state)
             .await.unwrap_err();
         assert!(hook_error.to_string().contains("Android JNI"));
+        let unban_request = || serde_json::from_value(serde_json::json!({"userId": "200"})).unwrap();
+        let native_error = unban::action("123".into(), unban_request(), &kick_state).await.unwrap_err();
+        assert!(matches!(native_error, NoaError::AndroidUnavailable(_)));
+        let missing_room = unban::action("999".into(), unban_request(), &kick_state).await.unwrap_err();
+        assert!(matches!(missing_room, NoaError::NotFound(_)));
+        kick_db.execute("UPDATE chat_rooms SET link_id = NULL", []).unwrap();
+        let regular_room = unban::action("123".into(), unban_request(), &kick_state).await.unwrap_err();
+        assert!(matches!(regular_room, NoaError::BadRequest(_)));
 
         let app = test::init_service(
             App::new()
@@ -2486,6 +2501,8 @@ mod tests {
         for (uri, auth_header, token) in [
             ("/api/rooms/123/kick", "Authorization", "Bearer test-token"),
             ("/internal/iris/endpoint/rooms/123/kick", "X-Noa-Hook-Token", "hook-token"),
+            ("/api/rooms/123/unban", "Authorization", "Bearer test-token"),
+            ("/internal/iris/endpoint/rooms/123/unban", "X-Noa-Hook-Token", "hook-token"),
         ] {
             let response = test::call_service(&app, test::TestRequest::post().uri(uri)
                 .set_json(serde_json::json!({"userId": "456"})).to_request()).await;

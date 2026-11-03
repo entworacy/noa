@@ -188,6 +188,16 @@ def audit(paths):
     require(
         len(kick_accessors) == 1, "unique native kick accessor: " + str(kick_accessors)
     )
+    unban_accessors = []
+    for name, params, result, flags in instance_methods(olk):
+        if params or flags & (64 | 4096) or result not in by or by[result]["flags"] & 512:
+            continue
+        matches = [m for m in instance_methods(by[result]) if m[2] == "V"
+                   and m[1] == ["J", "J", "J", "Ljava/lang/Runnable;"]]
+        if len(matches) == 1:
+            unban_accessors.append((name, result, matches[0][0]))
+    require(len(unban_accessors) == 1 and unban_accessors[0][:2] == kick_accessors[0][:2],
+            "unique native unban accessor: " + str(unban_accessors))
     context = cls("kotlin.coroutines.EmptyCoroutineContext")
     require(
         any(

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ACTION_CHATONROOM, ACTION_HIDE_MESSAGE, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND,
-    ACTION_VOX, actions, packets, post_main, vox, with_env,
+    ACTION_VOX, ACTION_UNBAN, actions, packets, post_main, vox, with_env,
 };
 
 #[derive(Deserialize)]
@@ -67,6 +67,11 @@ pub(crate) enum Operation {
         room: i64,
         user: i64,
         member_present: bool,
+    },
+    Unban {
+        link: i64,
+        room: i64,
+        user: i64,
     },
     HideMessage {
         room: i64,
@@ -174,6 +179,7 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         }
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
+        Operation::Unban { .. } => execute_main(id, &active.state, ACTION_UNBAN),
         Operation::HideMessage { .. } => execute_main(id, &active.state, ACTION_HIDE_MESSAGE),
         Operation::ChatOnRoom { .. } => execute_chat_on_room(id, &active.state),
         Operation::LoadOpenChatMember { .. } => execute_load_open_chat_member(id, &active.state),
@@ -215,6 +221,12 @@ impl TryFrom<Request> for Operation {
                     })
                 }
                 _ => Err("positive room and user IDs are required".to_string()),
+            },
+            "unban-member" => match (request.link, request.room, request.user) {
+                (Some(link), Some(room), Some(user)) if link > 0 && room > 0 && user > 0 => {
+                    Ok(Self::Unban { link, room, user })
+                }
+                _ => Err("positive link, room and user IDs are required".to_string()),
             },
             "hide-message" => {
                 match (request.room, request.log, request.log_type, request.message) {
@@ -586,6 +598,16 @@ mod tests {
 
     #[test]
     fn parses_supported_commands() {
+        let unban = request(serde_json::json!({
+            "token": "secret", "id": 12, "action": "unban-member", "link": 7, "room": 10, "user": 20
+        }));
+        assert_eq!(unban.channel(), Some(noa_agent_protocol::Channel::Control));
+        assert!(matches!(Operation::try_from(unban).unwrap(), Operation::Unban { link: 7, room: 10, user: 20 }));
+        for (link, room, user) in [(0, 10, 20), (7, 0, 20), (7, 10, -1)] {
+            assert!(Operation::try_from(request(serde_json::json!({
+                "token": "secret", "id": 12, "action": "unban-member", "link": link, "room": room, "user": user
+            }))).is_err());
+        }
         for present in [None, Some(true), Some(false)] {
             let mut body = serde_json::json!({
                 "token": "secret", "id": 9, "action": "kick-member", "room": 10, "user": 20

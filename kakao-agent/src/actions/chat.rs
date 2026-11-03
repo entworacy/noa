@@ -102,6 +102,19 @@ pub(crate) unsafe fn dispatch_kick(env: *mut JNIEnv, id: u64) -> Result<(), Stri
     Ok(())
 }
 
+pub(crate) unsafe fn dispatch_unban(env: *mut JNIEnv, id: u64) -> Result<(), String> {
+    let Operation::Unban { link, room, user } = command_operation(id)? else {
+        return Err("unban command state mismatch".to_string());
+    };
+    let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
+    unsafe {
+        call_static_void(env, resolver, "unban", "(JJJJ)V", &[
+            long_value(link), long_value(room), long_value(user), long_value(id as i64),
+        ])?
+    };
+    Ok(())
+}
+
 pub(crate) unsafe fn dispatch_hide_message(env: *mut JNIEnv, id: u64) -> Result<(), String> {
     let operation = command_operation(id)?;
     let Operation::HideMessage {

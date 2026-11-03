@@ -36,6 +36,11 @@ public final class KakaoSignatureResolver {
         }
     }
 
+    public static void unban(long linkId, long roomId, long userId, long commandId)
+            throws Exception {
+        KakaoUnbanResolver.unban(linkId, roomId, userId, commandId);
+    }
+
     /** Dispatches KakaoTalk's open-chat message rewrite (hide) operation. */
     public static void hideMessage(long roomId, long logId, int logType,
             long commandId, String message) throws Exception {

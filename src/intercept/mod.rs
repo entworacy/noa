@@ -203,6 +203,18 @@ pub async fn kick_member(_: i64, _: i64, _: bool) -> Result<(), crate::failure::
 }
 
 #[cfg(target_os = "android")]
+pub async fn unban_member(link_id: i64, room_id: i64, user_id: i64) -> Result<(), crate::failure::NoaError> {
+    runtime::unban_member(link_id, room_id, user_id).await
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn unban_member(_: i64, _: i64, _: i64) -> Result<(), crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable(
+        "KakaoTalk 후킹 강퇴 해제는 Android에서만 사용할 수 있습니다".to_string(),
+    ))
+}
+
+#[cfg(target_os = "android")]
 pub async fn hide_message(
     room_id: i64,
     log_id: i64,

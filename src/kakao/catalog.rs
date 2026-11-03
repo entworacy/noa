@@ -684,7 +684,7 @@ impl RoomCatalog {
         self.room_has_member(chat_id, user_id)
     }
 
-    fn open_chat_link_id(&self, chat_id: i64) -> Result<i64, NoaError> {
+    pub fn open_chat_link_id(&self, chat_id: i64) -> Result<i64, NoaError> {
         let connection = self.lock()?;
         let link_id: Option<Option<i64>> = connection
             .query_row(
@@ -1330,6 +1330,11 @@ mod tests {
         assert!(matches!(catalog.validate_kick_target(99, 300), Err(NoaError::NotFound(_))));
         catalog.current_user_id = 0;
         assert!(matches!(catalog.validate_kick_target(10, 300), Err(NoaError::Database(_))));
+        // Unban needs the room's link, independently of current membership/account lookup.
+        assert_eq!(catalog.open_chat_link_id(10).unwrap(), 77);
+        assert_eq!(catalog.open_chat_link_id(12).unwrap(), 78);
+        assert!(matches!(catalog.open_chat_link_id(11), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.open_chat_link_id(99), Err(NoaError::NotFound(_))));
     }
 
     #[test]

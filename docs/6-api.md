@@ -363,6 +363,28 @@ curl -X POST http://127.0.0.1:4000/send \
 
 서버의 권한 또는 대상 조건 거부는 `403`과 KICKMEM 응답의 `status`, `errMsg`를 반환합니다. 서버 응답을 확인하지 못하면 `409`를 반환하며, 재시도 전에 강퇴 목록을 확인합니다. 이미 나간 사용자를 처리하려면 KakaoTalk 후킹이 필요하고, 비활성화 상태에서는 `503`을 반환합니다.
 
+### `POST /api/rooms/{chatId}/unban`
+
+오픈채팅 사용자의 강퇴 제한을 해제합니다. KakaoTalk 후킹이 필요하며 `userId`로 대상을 지정합니다. 대상이 현재 참여자 목록에 없어도 호출할 수 있습니다.
+
+```json
+{"userId":"111"}
+```
+
+```json
+{
+  "ok":true,
+  "verified":true,
+  "verification":"loco-response",
+  "serverConfirmed":true,
+  "chatId":"123456789",
+  "userId":"111",
+  "message":"강퇴 해제를 완료했습니다"
+}
+```
+
+채팅방의 링크 ID를 DB에서 확인한 뒤 카카오톡 내부 `KLDELITEM`을 호출합니다. 내부 성공 콜백과 같은 링크·채팅방·사용자에 대한 송수신 packet ID 및 서버 상태를 확인해야 성공합니다. 서버의 권한 또는 해제 대상 조건 거부는 `403`, 서버 응답 확인 실패는 `409`, 후킹 비활성화는 `503`입니다. 서버 응답 확인 실패 시에는 강퇴 목록을 확인한 후 재시도합니다.
+
 ### `POST /api/rooms/{chatId}/leave`
 
 지정한 채팅방에서 나갑니다. 요청 본문은 필요하지 않습니다.
@@ -538,6 +560,7 @@ Noa 내부 브리지의 RichText `markdown`과 `custom` 처리 완료 결과:
 | `POST` | `/noa/open-chat/profiles/share-member` | `POST /api/open-chat/profiles/share-member` |
 | `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
 | `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
+| `POST` | `/noa/rooms/{chatId}/unban` | `POST /api/rooms/{chatId}/unban` |
 | `POST` | `/noa/rooms/{chatId}/messages/{logId}/hide` | `POST /api/rooms/{chatId}/messages/{logId}/hide` |
 | `POST` | `/noa/rooms/{chatId}/leave` | `POST /api/rooms/{chatId}/leave` |
 | `GET` | `/noa/vox/status` | `GET /api/vox/status` |

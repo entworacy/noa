@@ -29,6 +29,7 @@ pub(super) fn configure(config: &mut web::ServiceConfig) {
             )
             .route("/open-chat/join", web::post().to(join_open_chat))
             .route("/rooms/{chat_id}/kick", web::post().to(kick_member))
+            .route("/rooms/{chat_id}/unban", web::post().to(unban_member))
             .route(
                 "/rooms/{chat_id}/messages/{log_id}/hide",
                 web::post().to(hide_message),
@@ -59,6 +60,7 @@ async fn index(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Resp
             "POST /open-chat/profiles/share-member",
             "POST /open-chat/join",
             "POST /rooms/{chatId}/kick",
+            "POST /rooms/{chatId}/unban",
             "POST /rooms/{chatId}/messages/{logId}/hide",
             "POST /rooms/{chatId}/leave",
             "GET /vox/status",
@@ -134,6 +136,18 @@ async fn kick_member(
     authorize_iris_hook(&req, &state)?;
     Ok(web::Json(
         kick_member_action(chat_id.into_inner(), body.into_inner(), &state).await?,
+    ))
+}
+
+async fn unban_member(
+    req: HttpRequest,
+    chat_id: web::Path<String>,
+    body: web::Json<super::unban::UnbanMemberRequest>,
+    state: web::Data<AppState>,
+) -> Result<impl Responder, NoaError> {
+    authorize_iris_hook(&req, &state)?;
+    Ok(web::Json(
+        super::unban::action(chat_id.into_inner(), body.into_inner(), &state).await?,
     ))
 }
 

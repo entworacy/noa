@@ -213,6 +213,14 @@ fn transact_kakao(
             "user": user_id,
             "memberPresent": member_present,
         }),
+        KakaoAction::UnbanMember { link_id, user_id } => serde_json::json!({
+            "token": token,
+            "id": command.id,
+            "action": "unban-member",
+            "link": link_id,
+            "room": command.room_id,
+            "user": user_id,
+        }),
         KakaoAction::HideMessage {
             log_id,
             message_type,
