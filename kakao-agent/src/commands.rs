@@ -65,6 +65,10 @@ pub(crate) enum Operation {
         room: i64,
         user: i64,
     },
+    KickLeft {
+        room: i64,
+        user: i64,
+    },
     HideMessage {
         room: i64,
         log: i64,
@@ -171,6 +175,7 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         }
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
+        Operation::KickLeft { .. } => execute_main(id, &active.state, ACTION_KICK),
         Operation::HideMessage { .. } => execute_main(id, &active.state, ACTION_HIDE_MESSAGE),
         Operation::ChatOnRoom { .. } => execute_chat_on_room(id, &active.state),
         Operation::LoadOpenChatMember { .. } => execute_load_open_chat_member(id, &active.state),
@@ -206,6 +211,12 @@ impl TryFrom<Request> for Operation {
             "kick-member" => match (request.room, request.user) {
                 (Some(room), Some(user)) => Ok(Self::Kick { room, user }),
                 _ => Err("room and user are required".to_string()),
+            },
+            "kick-left-member" => match (request.room, request.user) {
+                (Some(room), Some(user)) if room > 0 && user > 0 => {
+                    Ok(Self::KickLeft { room, user })
+                }
+                _ => Err("positive room and user IDs are required".to_string()),
             },
             "hide-message" => {
                 match (request.room, request.log, request.log_type, request.message) {
@@ -575,6 +586,16 @@ mod tests {
 
     #[test]
     fn parses_supported_commands() {
+        let left = request(serde_json::json!({
+            "token": "secret", "id": 9, "action": "kick-left-member", "room": 10, "user": 20
+        }));
+        assert_eq!(left.channel(), Some(noa_agent_protocol::Channel::Control));
+        assert!(matches!(Operation::try_from(left).unwrap(), Operation::KickLeft { room: 10, user: 20 }));
+        for (room, user) in [(0, 20), (10, 0), (-1, 20)] {
+            assert!(Operation::try_from(request(serde_json::json!({
+                "token": "secret", "id": 9, "action": "kick-left-member", "room": room, "user": user
+            }))).is_err());
+        }
         let probe = request(serde_json::json!({
             "token": "secret", "id": 8, "action": "require-richtext"
         }));

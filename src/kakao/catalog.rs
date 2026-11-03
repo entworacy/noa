@@ -668,6 +668,45 @@ impl RoomCatalog {
         )))
     }
 
+    pub fn validate_left_kick_target(&self, chat_id: i64, user_id: i64) -> Result<(), NoaError> {
+        if self.current_user_id <= 0 {
+            return Err(NoaError::Database(
+                "현재 사용자 ID를 확인하지 못했습니다".to_string(),
+            ));
+        }
+        if user_id == self.current_user_id {
+            return Err(NoaError::BadRequest(
+                "자기 자신은 강퇴할 수 없습니다".to_string(),
+            ));
+        }
+        self.open_chat_link_id(chat_id)?;
+        if self.room_has_member(chat_id, user_id)? {
+            return Err(NoaError::Conflict(
+                "현재 참여 중인 사용자는 /kick API를 사용하세요".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn open_chat_link_id(&self, chat_id: i64) -> Result<i64, NoaError> {
+        let connection = self.lock()?;
+        let link_id: Option<Option<i64>> = connection
+            .query_row(
+                "SELECT link_id FROM db1.chat_rooms WHERE id = ?1 LIMIT 1",
+                [chat_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| NoaError::Database(format!("오픈채팅 링크 조회 실패: {error}")))?;
+        match link_id {
+            Some(Some(id)) if id > 0 => Ok(id),
+            Some(_) => Err(NoaError::BadRequest(
+                "오픈채팅방에서만 사용할 수 있습니다".to_string(),
+            )),
+            None => Err(NoaError::NotFound(format!("채팅방을 찾을 수 없습니다: {chat_id}"))),
+        }
+    }
+
     /// Reads the authoritative active-member list for one room without rebuilding the
     /// complete room catalog. This is intentionally stricter than `snapshot`: an
     /// unreadable member list must not be mistaken for a successful removal.
@@ -1271,6 +1310,31 @@ fn now() -> i64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn validates_departed_kick_targets_without_a_member_record() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("ATTACH ':memory:' AS db1;
+            CREATE TABLE db1.chat_rooms (id INTEGER PRIMARY KEY, link_id INTEGER, active_member_ids TEXT, v TEXT);
+            INSERT INTO db1.chat_rooms VALUES (10, 77, '[100,200]', '{}'),
+              (11, NULL, '[]', '{}'), (12, 78, 'invalid', '{}');").unwrap();
+        let mut catalog = RoomCatalog {
+            connection: Mutex::new(connection),
+            primary_path: PathBuf::new(),
+            current_user_id: 100,
+            cipher: SealedText::for_owner(100),
+            has_user_database: false,
+            has_profile_database: false,
+        };
+        assert!(catalog.validate_left_kick_target(10, 300).is_ok());
+        assert!(matches!(catalog.validate_left_kick_target(10, 100), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.validate_left_kick_target(10, 200), Err(NoaError::Conflict(_))));
+        assert!(matches!(catalog.validate_left_kick_target(11, 300), Err(NoaError::BadRequest(_))));
+        assert!(matches!(catalog.validate_left_kick_target(12, 300), Err(NoaError::Database(_))));
+        assert!(matches!(catalog.validate_left_kick_target(99, 300), Err(NoaError::NotFound(_))));
+        catalog.current_user_id = 0;
+        assert!(matches!(catalog.validate_left_kick_target(10, 300), Err(NoaError::Database(_))));
+    }
 
     #[test]
     fn parses_numeric_and_string_member_ids() {

@@ -358,6 +358,28 @@ curl -X POST http://127.0.0.1:4000/send \
 }
 ```
 
+### `POST /api/rooms/{chatId}/kick-left`
+
+이미 나간 오픈채팅 사용자를 `userId`로 강퇴 처리합니다. KakaoTalk 후킹이 필요하며 닉네임 지정은 지원하지 않습니다. 현재 참여 중인 사용자는 `/kick`을 사용합니다. 자기 자신, 일반 채팅방, 읽을 수 없는 참여자 목록은 요청 전에 거절합니다.
+
+```json
+{"userId":"111"}
+```
+
+```json
+{
+  "ok":true,
+  "verified":true,
+  "verification":"loco-response",
+  "serverConfirmed":true,
+  "chatId":"123456789",
+  "userId":"111",
+  "message":"퇴장 사용자 강퇴를 완료했습니다"
+}
+```
+
+현재 멤버 조회 없이 카카오톡 내부 강퇴 함수를 호출합니다. 성공 콜백과 해당 대상의 `KICKMEM` 송수신 packet ID 및 서버 상태를 확인해야 성공 응답을 반환합니다. 대상이 이미 참여자 목록에 없다는 사실은 성공 근거로 사용하지 않습니다. 서버의 권한 또는 대상 조건 거부는 `403`, 현재 참여 중인 대상 또는 서버 응답 확인 실패는 `409`, 후킹 비활성화는 `503`입니다. 응답 확인 실패 시에는 강퇴 목록을 확인한 후 재시도합니다.
+
 ### `POST /api/rooms/{chatId}/leave`
 
 지정한 채팅방에서 나갑니다. 요청 본문은 필요하지 않습니다.
@@ -533,6 +555,7 @@ Noa 내부 브리지의 RichText `markdown`과 `custom` 처리 완료 결과:
 | `POST` | `/noa/open-chat/profiles/share-member` | `POST /api/open-chat/profiles/share-member` |
 | `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
 | `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
+| `POST` | `/noa/rooms/{chatId}/kick-left` | `POST /api/rooms/{chatId}/kick-left` |
 | `POST` | `/noa/rooms/{chatId}/messages/{logId}/hide` | `POST /api/rooms/{chatId}/messages/{logId}/hide` |
 | `POST` | `/noa/rooms/{chatId}/leave` | `POST /api/rooms/{chatId}/leave` |
 | `GET` | `/noa/vox/status` | `GET /api/vox/status` |

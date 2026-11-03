@@ -80,15 +80,17 @@ pub(crate) unsafe fn dispatch_send(env: *mut JNIEnv, id: u64) -> Result<(), Stri
 
 pub(crate) unsafe fn dispatch_kick(env: *mut JNIEnv, id: u64) -> Result<(), String> {
     let operation = command_operation(id)?;
-    let Operation::Kick { room, user } = operation else {
-        return Err("kick command state mismatch".to_string());
+    let (room, user, method) = match operation {
+        Operation::Kick { room, user } => (room, user, "kick"),
+        Operation::KickLeft { room, user } => (room, user, "kickLeft"),
+        _ => return Err("kick command state mismatch".to_string()),
     };
     let resolver = unsafe { app_class(env, "dev.noa.kakao.KakaoSignatureResolver")? };
     unsafe {
         call_static_void(
             env,
             resolver,
-            "kick",
+            method,
             "(JJJ)V",
             &[long_value(room), long_value(user), long_value(id as i64)],
         )?

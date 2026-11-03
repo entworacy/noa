@@ -212,6 +212,13 @@ fn transact_kakao(
             "room": command.room_id,
             "user": user_id,
         }),
+        KakaoAction::KickLeftMember { user_id } => serde_json::json!({
+            "token": token,
+            "id": command.id,
+            "room": command.room_id,
+            "action": "kick-left-member",
+            "user": user_id,
+        }),
         KakaoAction::HideMessage {
             log_id,
             message_type,

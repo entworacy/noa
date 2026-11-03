@@ -30,6 +30,7 @@ use crate::{
 };
 
 mod iris_endpoint;
+mod kick_left;
 mod loco;
 mod vox;
 mod vox_audio;
@@ -60,6 +61,10 @@ pub fn configure(config: &mut web::ServiceConfig) {
         .route("/api/rooms/{chat_id}", web::get().to(room))
         .route("/api/rooms/{chat_id}/leave", web::post().to(leave_chat))
         .route("/api/rooms/{chat_id}/kick", web::post().to(kick_member))
+        .route(
+            "/api/rooms/{chat_id}/kick-left",
+            web::post().to(kick_left::endpoint),
+        )
         .route(
             "/api/rooms/{chat_id}/messages/{log_id}/hide",
             web::post().to(hide_message),
@@ -1989,6 +1994,10 @@ mod tests {
         // Raw RichText custom inputs still require a hook before DB access.
         let mut disabled = state.clone();
         Arc::make_mut(&mut disabled.config).kakao_hook_enabled = false;
+        let left_error = kick_left::action("123".into(), serde_json::from_value(
+            serde_json::json!({"userId": "456"})
+        ).unwrap(), &disabled).await.unwrap_err();
+        assert!(matches!(left_error, NoaError::AndroidUnavailable(_)));
         for payload in [
             serde_json::json!({"type":"custom", "room":"123", "data":{
                 "type":1, "message":"hello", "attachment":{"richText":{"bold":[[0,5]]}}
@@ -2403,6 +2412,30 @@ mod tests {
             endpoint_join_without_android.status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+
+        for (uri, auth_header, token) in [
+            ("/api/rooms/123/kick-left", "Authorization", "Bearer test-token"),
+            ("/internal/iris/endpoint/rooms/123/kick-left", "X-Noa-Hook-Token", "hook-token"),
+        ] {
+            let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                .set_json(serde_json::json!({"userId": "456"})).to_request()).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            for body in [
+                serde_json::json!({}), serde_json::json!({"nickname": "departed"}),
+                serde_json::json!({"userId": null}), serde_json::json!({"userId": 0}),
+                serde_json::json!({"userId": -1}), serde_json::json!({"userId": 1.5}),
+                serde_json::json!({"userId": "9223372036854775808"}),
+            ] {
+                let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                    .insert_header((auth_header, token)).set_json(body).to_request()).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            }
+            let response = test::call_service(&app, test::TestRequest::post().uri(uri)
+                .insert_header((auth_header, token))
+                .set_json(serde_json::json!({"userId": "9007199254740993"})).to_request()).await;
+            // A missing catalog cannot stand in for evidence that a member has left.
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
 
         let endpoint_kick_without_android = test::call_service(
             &app,

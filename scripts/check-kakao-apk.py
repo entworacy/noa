@@ -153,6 +153,41 @@ def audit(paths):
         + ", providers="
         + str(providers),
     )
+    friend = cls("com.kakao.talk.db.model.Friend")
+    friend_id_owner = friend
+    def has_id_accessor(owner):
+        return any(not flags & 8 and desc == "()J" for _, desc, flags in owner["methods"])
+    while not has_id_accessor(friend_id_owner) and friend_id_owner["super"] in by:
+        friend_id_owner = by[friend_id_owner["super"]]
+    require(
+        has(friend, "<init>", "(J Ljava/lang/String; Ljava/lang/String;)V")
+        and has_id_accessor(friend_id_owner),
+        "departed kick Friend ID contract",
+    )
+    olk = largest_outer("OlkManager.kt")
+    kick_accessors = []
+    for name, params, result, flags in instance_methods(olk):
+        if (
+            params
+            or flags & (64 | 4096)
+            or result not in by
+            or by[result]["flags"] & 512
+        ):
+            continue
+        matches = [
+            m
+            for m in instance_methods(by[result])
+            if m[2] == "V"
+            and len(m[1]) == 5
+            and m[1][1:4] == [friend["name"], "Z", "Z"]
+            and m[1][4] in by
+            and by[m[1][4]]["flags"] & 512
+        ]
+        if len(matches) == 1:
+            kick_accessors.append((name, result, matches[0][0]))
+    require(
+        len(kick_accessors) == 1, "unique native kick accessor: " + str(kick_accessors)
+    )
     context = cls("kotlin.coroutines.EmptyCoroutineContext")
     require(
         any(

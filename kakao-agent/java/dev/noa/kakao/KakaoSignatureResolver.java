@@ -31,6 +31,10 @@ public final class KakaoSignatureResolver {
         KakaoRoomResolver.kick(roomId, userId, commandId);
     }
 
+    public static void kickLeft(long roomId, long userId, long commandId) throws Exception {
+        KakaoLeftMemberKick.kick(roomId, userId, commandId);
+    }
+
     /** Dispatches KakaoTalk's open-chat message rewrite (hide) operation. */
     public static void hideMessage(long roomId, long logId, int logType,
             long commandId, String message) throws Exception {

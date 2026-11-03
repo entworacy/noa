@@ -30,6 +30,9 @@ enum KakaoAction {
     KickMember {
         user_id: i64,
     },
+    KickLeftMember {
+        user_id: i64,
+    },
     HideMessage {
         log_id: i64,
         message_type: i32,
@@ -97,6 +100,7 @@ impl KakaoAction {
             Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
             Self::KickMember { .. } => "참여자 강퇴",
+            Self::KickLeftMember { .. } => "퇴장 사용자 강퇴",
             Self::HideMessage { .. } => "메시지 가리기",
             Self::ChatOnRoom => "CHATONROOM",
             Self::LoadOpenChatMember { .. } => "오픈채팅 멤버 프로필 조회",
@@ -161,13 +165,42 @@ pub async fn send_custom(room_id: i64, row_id: i64) -> Result<(), NoaError> {
 }
 
 pub async fn kick_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
+    kick(room_id, user_id, false).await
+}
+
+pub async fn kick_left_member(room_id: i64, user_id: i64) -> Result<(), NoaError> {
+    kick(room_id, user_id, true).await
+}
+
+async fn kick(room_id: i64, user_id: i64, left: bool) -> Result<(), NoaError> {
     let started_at = unix_timestamp_millis();
     let result = tokio::task::spawn_blocking(move || {
-        send_command_blocking(room_id, KakaoAction::KickMember { user_id })
+        let action = if left {
+            KakaoAction::KickLeftMember { user_id }
+        } else {
+            KakaoAction::KickMember { user_id }
+        };
+        send_command_blocking(room_id, action)
     })
     .await
     .map_err(|error| NoaError::Internal(error.to_string()))?;
     match result {
+        Ok(_) if left => {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                if let Some(result) =
+                    crate::intercept::loco::kick_response(room_id, user_id, started_at)
+                {
+                    return result.map_err(NoaError::Forbidden);
+                }
+                if Instant::now() >= deadline {
+                    return Err(NoaError::Conflict(
+                        "강퇴 요청의 KICKMEM 서버 응답을 확인하지 못했습니다. 재시도 전에 강퇴 목록을 확인하세요".to_string(),
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
         Ok(_) => Ok(()),
         Err(error) => {
             if let Some(detail) = wait_for_kick_rejection(room_id, user_id, started_at).await {

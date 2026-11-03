@@ -10,3 +10,4 @@ javac --release 8 -d "$build_dir" \
   "$source_dir/KakaoReflection.java" "$fixture_dir/KakaoSignatureResolver.java" \
   "$fixture_dir/ContractTest.java"
 java -cp "$build_dir" dev.noa.kakao.ContractTest
+python3 "$project_dir/kakao-agent/tests/kick_left_compat.py"
