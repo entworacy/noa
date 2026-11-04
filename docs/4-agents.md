@@ -69,6 +69,14 @@ Kakao agent는 현재 Android JavaVM을 찾고 스레드를 attach한 뒤 내장
 
 KakaoTalk 내부 클래스와 메서드는 난독화될 수 있으므로 호출 전에 reflection으로 정확한 parameter type과 arity를 검사합니다. 결과 객체와 식별자도 null, 양수 범위, 요청값 일치 여부를 단계마다 확인합니다.
 
+## LOCO 시그니처 판별
+
+LOCO 요청과 응답은 같은 패킷 부모 클래스와 클래스 이름상의 패키지를 공유해야 합니다.
+Android의 `Class.getPackage()`는 패키지 메타데이터가 없으면 `null`을 반환할 수 있으므로,
+패키지 비교에는 바이너리 클래스 이름을 사용합니다. 패키지 없는 난독화 클래스도 같은
+조건으로 검증하며, 송수신 메서드의 유일성·bridge·수신기·coroutine 및 패킷 레이아웃 검증을 유지합니다.
+탐색 실패 로그에는 후보가 제외된 조건을 포함합니다.
+
 ## LOCO 직접 발신
 
 `POST /api/loco/send`는 기존 인증을 거쳐 control 채널의 `send-loco` 명령을 보냅니다. 호스트와 에이전트가 같은 `noa-agent-protocol::loco::SendLocoRequest` 검증을 사용합니다. 에이전트는 JSON 값을 JNI로 Java Map/List 및 정확한 숫자 wrapper/byte 배열로 변환한 뒤 `LocoSender`를 호출합니다. 문자열은 UTF-16으로 생성하므로 이모지와 값 안의 NUL도 보존합니다. 키의 NUL은 BSON 규칙에 따라 거부합니다.

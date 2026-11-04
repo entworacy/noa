@@ -35,7 +35,7 @@ public final class LocoSignatureResolver {
         }
         String detail = failures.isEmpty()
                 ? "no class had the required LocoClient method relationships"
-                : failures.get(failures.size() - 1);
+                : String.join(" | ", failures);
         throw new NoSuchMethodException(
                 "LOCO signature was not found (versionCode=" + versionCode
                         + ", sourceCandidates=" + classes.size() + "): " + detail);
@@ -67,19 +67,26 @@ public final class LocoSignatureResolver {
                 Method send = uniqueSend(methods, request);
                 Method receive = uniqueReceive(receiver);
                 if (send == null || receive == null) {
+                    reject(failures, name, "non-unique send or receive method for " + receiver.getName());
                     continue;
                 }
                 Class<?> response = receive.getParameterTypes()[0];
-                if (!packetRelationship(request, response)
-                        || !hasStaticSendBridge(methods, client, request)
-                        || !receiverBehavior(receiver)) {
+                if (!packetRelationship(request, response)) {
+                    reject(failures, name, "packet relationship mismatch: "
+                            + request.getName() + " / " + response.getName());
+                    continue;
+                }
+                if (!hasStaticSendBridge(methods, client, request) || !receiverBehavior(receiver)) {
+                    reject(failures, name, "missing send bridge or receiver behavior");
                     continue;
                 }
                 Method resume = mainCoroutineResume(loader, name, client, classes);
                 if (resume == null) {
+                    reject(failures, name, "missing coroutine resume method");
                     continue;
                 }
                 if (matched != null) {
+                    reject(failures, name, "ambiguous LOCO method relationships");
                     return null;
                 }
                 matched = new Resolution(send, receive, resume);
@@ -135,16 +142,23 @@ public final class LocoSignatureResolver {
     }
 
     private static boolean packetRelationship(Class<?> request, Class<?> response) {
-        Package requestPackage = request.getPackage();
-        Package responsePackage = response.getPackage();
         return Modifier.isFinal(request.getModifiers())
                 && Modifier.isFinal(response.getModifiers())
                 && request.getSuperclass() != null
                 && request.getSuperclass() == response.getSuperclass()
                 && request.getSuperclass() != Object.class
-                && requestPackage != null
-                && responsePackage != null
-                && requestPackage.getName().equals(responsePackage.getName());
+                && packageName(request).equals(packageName(response));
+    }
+
+    private static String packageName(Class<?> type) {
+        // ART may return null from Class.getPackage(), especially for R8's unnamed
+        // package. Binary names retain the DEX package without Package metadata.
+        String name = type.getName();
+        return name.substring(0, name.lastIndexOf('.') + 1);
+    }
+
+    private static void reject(List<String> failures, String name, String reason) {
+        if (failures.size() < 32) failures.add(name + ": " + reason);
     }
 
     private static boolean hasStaticSendBridge(
