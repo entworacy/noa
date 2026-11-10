@@ -18,6 +18,10 @@ pub(super) fn configure(config: &mut web::ServiceConfig) {
             .route("", web::get().to(index))
             .route("/", web::get().to(index))
             .route("/health", web::get().to(health))
+            .route("/dialogs/status", web::get().to(super::dialogs::iris_status))
+            .route("/dialogs", web::post().to(super::dialogs::iris_show))
+            .route("/dialogs/{dialog_id}", web::get().to(super::dialogs::iris_get))
+            .route("/dialogs/{dialog_id}", web::delete().to(super::dialogs::iris_dismiss))
             .route("/open-chat/profiles", web::get().to(open_chat_profiles))
             .route(
                 "/open-chat/profiles/share",
@@ -62,6 +66,7 @@ async fn index(req: HttpRequest, state: web::Data<AppState>) -> Result<impl Resp
             "POST /open-chat/join",
             "POST /rooms/{chatId}/kick",
             "POST /rooms/{chatId}/unban",
+            "GET /dialogs/status", "POST /dialogs", "GET /dialogs/{dialogId}", "DELETE /dialogs/{dialogId}",
             "POST /rooms/{chatId}/messages/{logId}/reactions",
             "POST /rooms/{chatId}/messages/{logId}/hide",
             "POST /rooms/{chatId}/leave",

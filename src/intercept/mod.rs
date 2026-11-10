@@ -517,3 +517,12 @@ pub async fn react_message(room: i64, log: i64, link: Option<i64>, reaction: noa
 pub async fn react_message(_: i64, _: i64, _: Option<i64>, _: noa_agent_protocol::reaction::ReactionRequest) -> Result<(), crate::failure::NoaError> {
     Err(crate::failure::NoaError::AndroidUnavailable("메시지 리액션에는 Android KakaoTalk 후킹이 필요합니다".into()))
 }
+
+#[cfg(target_os = "android")]
+pub async fn dialog_command(command: noa_agent_protocol::dialog::DialogCommand) -> Result<serde_json::Value, crate::failure::NoaError> {
+    runtime::dialog_command(command).await
+}
+#[cfg(not(target_os = "android"))]
+pub async fn dialog_command(_: noa_agent_protocol::dialog::DialogCommand) -> Result<serde_json::Value, crate::failure::NoaError> {
+    Err(crate::failure::NoaError::AndroidUnavailable("오버레이 다이얼로그는 Android에서만 사용할 수 있습니다".into()))
+}

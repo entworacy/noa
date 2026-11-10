@@ -69,6 +69,18 @@ Kakao agent는 현재 Android JavaVM을 찾고 스레드를 attach한 뒤 내장
 
 KakaoTalk 내부 클래스와 메서드는 난독화될 수 있으므로 호출 전에 reflection으로 정확한 parameter type과 arity를 검사합니다. 결과 객체와 식별자도 null, 양수 범위, 요청값 일치 여부를 단계마다 확인합니다.
 
+## 백그라운드 다이얼로그
+
+다이얼로그 명령은 Kakao control 채널에서 앱 메인 스레드로 전달합니다.
+`OverlayDialogs`는 Application context와 `TYPE_APPLICATION_OVERLAY`를 사용하므로
+현재 Activity나 카카오톡의 전경 전환이 필요하지 않습니다. 표시 전에 Android의
+`Settings.canDrawOverlays`를 확인하고, 창의 `show`와 `isShowing`이 성공한 뒤 응답합니다.
+
+표시 중인 창은 하나로 제한하고 버튼 선택·취소·API 닫기·시간 초과를 메인 스레드에서
+직렬 처리합니다. 종료 결과는 에이전트 세션 내 최근 64개까지 보관하며, 종료 시 UI 객체와
+타이머 참조를 해제합니다. 프로세스가 종료되면 창과 결과도 사라집니다.
+표시 권한 허용은 기기의 카카오톡 설정에서 관리합니다.
+
 ## LOCO 시그니처 판별
 
 LOCO 요청과 응답은 같은 패킷 부모 클래스와 클래스 이름상의 패키지를 공유해야 합니다.

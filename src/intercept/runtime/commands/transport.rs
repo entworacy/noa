@@ -192,6 +192,9 @@ fn transact_kakao(
         return Ok(());
     }
     let request = match &command.action {
+        KakaoAction::Dialog(dialog) => serde_json::json!({
+            "token": token, "id": command.id, "action": "dialog", "dialog": dialog,
+        }),
         KakaoAction::RequireRichText => serde_json::json!({
             "token": token, "id": command.id, "action": "require-richtext",
         }),

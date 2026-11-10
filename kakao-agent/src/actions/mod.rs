@@ -1,4 +1,6 @@
 mod chat;
+mod dialog;
+pub(crate) use dialog::dispatch_dialog;
 mod open_chat;
 
 pub(crate) use chat::{

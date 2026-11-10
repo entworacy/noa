@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ACTION_CHATONROOM, ACTION_HIDE_MESSAGE, ACTION_KICK, ACTION_LOAD_OPEN_CHAT_MEMBER, ACTION_SEND,
-    ACTION_VOX, ACTION_UNBAN, ACTION_REACT, actions, packets, post_main, vox, with_env,
+    ACTION_VOX, ACTION_UNBAN, ACTION_REACT, ACTION_DIALOG, actions, packets, post_main, vox, with_env,
 };
 
 #[derive(Deserialize)]
@@ -16,6 +16,7 @@ pub(crate) struct Request {
     pub(crate) token: String,
     pub(crate) id: u64,
     action: String,
+    dialog: Option<noa_agent_protocol::dialog::DialogCommand>,
     reaction: Option<noa_agent_protocol::reaction::ReactionRequest>,
     room: Option<i64>,
     row: Option<i64>,
@@ -58,6 +59,7 @@ pub(crate) struct Request {
 
 #[derive(Clone)]
 pub(crate) enum Operation {
+    Dialog(noa_agent_protocol::dialog::DialogCommand),
     RequireRichText,
     SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     Send {
@@ -179,6 +181,7 @@ pub(crate) fn execute(request: Request) -> (u64, CommandResult) {
         Operation::SendLoco(packet) => {
             with_env(|env| unsafe { packets::send_loco(env, packet) }).map(Some)
         }
+        Operation::Dialog(_) => execute_main(id, &active.state, ACTION_DIALOG),
         Operation::Send { .. } => execute_send(id, &active.state),
         Operation::Kick { .. } => execute_kick(id, &active.state),
         Operation::React { .. } => execute_main(id, &active.state, ACTION_REACT),
@@ -205,6 +208,11 @@ impl TryFrom<Request> for Operation {
 
     fn try_from(request: Request) -> Result<Self, Self::Error> {
         match request.action.as_str() {
+            "dialog" => {
+                let dialog = request.dialog.ok_or("dialog is required")?;
+                dialog.validate()?;
+                Ok(Self::Dialog(dialog))
+            }
             "require-richtext" => Ok(Self::RequireRichText),
             "send-loco" => {
                 let packet = request.packet.ok_or("packet is required")?;
@@ -561,9 +569,13 @@ pub(crate) fn mark_loaded(id: u64) {
 }
 
 pub(crate) fn mark_complete(id: u64, result: Result<(), String>) {
+    mark_result(id, result.map(|_| None));
+}
+
+pub(crate) fn mark_result(id: u64, result: CommandResult) {
     if let Some(state) = lock(commands()).get(&id).cloned() {
         let mut progress = lock(&state.progress);
-        progress.result = Some(result.map(|_| None));
+        progress.result = Some(result);
         state.changed.notify_all();
     }
 }
@@ -605,6 +617,19 @@ mod tests {
 
     fn request(value: serde_json::Value) -> Request {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn parses_dialog_actions_on_control_channel() {
+        let value = serde_json::json!({"token":"secret","id":99,"action":"dialog","dialog":{
+            "operation":"show","dialogId":"example","content":{"title":"Noa","message":"hello"}
+        }});
+        let request = request(value.clone());
+        assert_eq!(request.channel(), Some(noa_agent_protocol::Channel::Control));
+        assert!(matches!(Operation::try_from(request).unwrap(), Operation::Dialog(_)));
+        let mut invalid = value;
+        invalid["dialog"]["content"]["timeoutSeconds"] = serde_json::json!(0);
+        assert!(Operation::try_from(serde_json::from_value::<Request>(invalid).unwrap()).is_err());
     }
 
     #[test]
