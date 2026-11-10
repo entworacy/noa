@@ -1,5 +1,6 @@
 //! Wire-level channel ownership shared by the host and injected Kakao agent.
 pub mod loco;
+pub mod dialog;
 pub mod reaction;
 
 pub const VERSION: u8 = 2;
@@ -32,7 +33,8 @@ impl Channel {
 
     pub fn for_action(action: &str) -> Option<Self> {
         match action {
-            "send-loco"
+            "dialog"
+            | "send-loco"
             | "require-richtext"
             | "send-custom"
             | "kick-member"

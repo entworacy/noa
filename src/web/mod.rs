@@ -30,6 +30,7 @@ use crate::{
 };
 
 mod iris_endpoint;
+mod dialogs;
 mod loco;
 mod unban;
 mod reaction;
@@ -52,6 +53,7 @@ pub struct AppState {
 }
 
 pub fn configure(config: &mut web::ServiceConfig) {
+    dialogs::configure(config);
     config
         .route("/", web::get().to(dashboard))
         .route("/dashboard", web::get().to(dashboard))
@@ -2514,6 +2516,39 @@ mod tests {
             let response = test::call_service(&app, test::TestRequest::post().uri(uri)
                 .insert_header((auth_header, token)).set_json(serde_json::json!({"reactionType":1})).to_request()).await;
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        for (prefix, auth_header, token) in [
+            ("/api/dialogs", "Authorization", "Bearer test-token"),
+            ("/internal/iris/endpoint/dialogs", "X-Noa-Hook-Token", "hook-token"),
+        ] {
+            let valid = serde_json::json!({"title":"Noa", "message":"hello"});
+            let response = test::call_service(&app, test::TestRequest::post().uri(prefix).set_json(&valid).to_request()).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            for body in [serde_json::json!({"title":"", "message":"hello"}),
+                serde_json::json!({"title":"Noa", "message":"hello", "timeoutSeconds":0}),
+                serde_json::json!({"title":"Noa", "message":"hello", "buttons":[]})] {
+                let response = test::call_service(&app, test::TestRequest::post().uri(prefix)
+                    .insert_header((auth_header, token)).set_json(body).to_request()).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            }
+            let response = test::call_service(&app, test::TestRequest::post().uri(prefix)
+                .insert_header((auth_header, token)).set_json(valid).to_request()).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            for suffix in ["/status", "/example"] {
+                let uri = format!("{prefix}{suffix}");
+                let response = test::call_service(&app, test::TestRequest::get().uri(&uri).to_request()).await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                let response = test::call_service(&app, test::TestRequest::get().uri(&uri)
+                    .insert_header((auth_header, token)).to_request()).await;
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            }
+            let uri = format!("{prefix}/example");
+            let response = test::call_service(&app, test::TestRequest::delete().uri(&uri).to_request()).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = test::call_service(&app, test::TestRequest::delete().uri(&uri)
+                .insert_header((auth_header, token)).to_request()).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         }
 
         let endpoint_kick_without_database = test::call_service(

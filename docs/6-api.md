@@ -336,6 +336,74 @@ curl -X POST http://127.0.0.1:4000/send \
 }
 ```
 
+### 백그라운드 다이얼로그
+
+카카오톡이 백그라운드에 있어도 Android 오버레이 다이얼로그를 표시합니다.
+`KAKAO_HOOK_ENABLED=true`, 연결된 Kakao 에이전트, 카카오톡의 **다른 앱 위에 표시**
+허용이 필요합니다. 해당 권한은 Android 기기 설정에서 허용합니다.
+Activity를 열거나 카카오톡을 전경으로 이동하지 않습니다. 카카오톡 프로세스가 종료되거나
+Android가 오버레이를 숨기는 잠금·보안 화면에서는 표시가 제한됩니다.
+
+#### `GET /api/dialogs/status`
+
+```json
+{"ok":true,"overlayPermission":true,"activeDialogId":null,"retainedResults":0,"historyLimit":64}
+```
+
+권한이 없어도 상태 조회는 성공하며 `overlayPermission:false`를 반환합니다.
+
+#### `POST /api/dialogs`
+
+```json
+{
+  "title":"작업 완료",
+  "message":"결과를 확인해 주세요.",
+  "buttons":[{"id":"confirm","label":"확인"},{"id":"cancel","label":"취소"}],
+  "cancelable":true,
+  "timeoutSeconds":60
+}
+```
+
+`title`과 `message`는 각각 최대 128자, 4096자이며 빈 문자열은 허용하지 않습니다.
+버튼은 1~3개, ID는 중복 없이 영문·숫자·밑줄·하이픈 1~64자, label은 1~64자입니다.
+버튼 생략 시 `confirm` ID와 `확인` label을 사용합니다. 취소 허용 기본값은 `true`,
+시간 제한은 기본 60초이며 1~600초입니다. `cancelable:false`여도 버튼·API·시간 제한으로 닫힙니다.
+창 제목에는 `Noa` 표시가 붙습니다.
+
+```json
+{
+  "ok":true,
+  "dialogId":"4f0be907-e193-4f08-bc33-057c64912609",
+  "state":"shown",
+  "buttonId":null,
+  "createdAt":1794300000000,
+  "expiresAt":1794300060000,
+  "finishedAt":null,
+  "lastError":null
+}
+```
+
+창이 Android에 붙은 뒤 즉시 응답하며, 버튼 선택을 기다리며 HTTP 연결을 유지하지 않습니다.
+`shown`은 창 부착 확인이며 모든 시스템 화면에서의 가시성을 보장하지 않습니다.
+한 번에 하나만 표시하고 다른 창이 표시 중이면 `409`를 반환합니다.
+
+#### `GET /api/dialogs/{dialogId}`
+
+생성 시 받은 ID로 현재 상태 또는 종료 결과를 조회합니다.
+`state`는 `shown`, `selected`, `cancelled`, `dismissed`, `expired` 중 하나입니다.
+`selected`이면 `buttonId`에 선택한 버튼 ID가 들어가고 종료 시 `finishedAt`에 Unix 밀리초가 들어갑니다.
+시간 제한은 Android 메인 스레드의 타이머를 사용하므로 절전·스레드 정지 시 처리가 지연될 수 있습니다.
+UI 콜백 중 창을 닫지 못하면 `lastError`에 이유를 기록하고 표시 중 상태를 유지하므로 API로 닫기를 재시도할 수 있습니다.
+
+#### `DELETE /api/dialogs/{dialogId}`
+
+표시 중인 창을 닫고 `dismissed` 결과를 반환합니다. 이미 종료된 창은 기존 결과를 그대로 반환합니다.
+최근 64개 결과만 에이전트 메모리에 보관하며, 오래된 결과와 프로세스 재시작 이전 ID는 `404`입니다.
+Noa 연결 오류가 발생하면 `/api/dialogs/status`의 `activeDialogId`를 확인한 뒤 재시도합니다.
+
+모든 경로는 기존 Noa 인증을 사용합니다. 표시 권한 거부는 `403`, 알 수 없는 ID는 `404`,
+다른 창 표시 중은 `409`, 후킹 비활성화·연결 실패·창 생성 실패는 `503`입니다.
+
 ### `POST /api/rooms/{chatId}/kick`
 
 오픈채팅 사용자를 강퇴합니다. KakaoTalk 후킹이 필수이며, Noa가 현재 참여 여부를 확인해 내부 호출과 결과 검증 방식을 자동으로 선택합니다. 요청 형식은 동일하며 별도의 상태 옵션은 필요하지 않습니다.
@@ -581,6 +649,10 @@ Noa 내부 브리지의 RichText `markdown`과 `custom` 처리 완료 결과:
 | `POST` | `/noa/open-chat/profiles/share` | `POST /api/open-chat/profiles/share` |
 | `POST` | `/noa/open-chat/profiles/share-member` | `POST /api/open-chat/profiles/share-member` |
 | `POST` | `/noa/open-chat/join` | `POST /api/open-chat/join` |
+| `GET` | `/noa/dialogs/status` | `GET /api/dialogs/status` |
+| `POST` | `/noa/dialogs` | `POST /api/dialogs` |
+| `GET` | `/noa/dialogs/{dialogId}` | `GET /api/dialogs/{dialogId}` |
+| `DELETE` | `/noa/dialogs/{dialogId}` | `DELETE /api/dialogs/{dialogId}` |
 | `POST` | `/noa/rooms/{chatId}/kick` | `POST /api/rooms/{chatId}/kick` |
 | `POST` | `/noa/rooms/{chatId}/messages/{logId}/reactions` | `POST /api/rooms/{chatId}/messages/{logId}/reactions` |
 | `POST` | `/noa/rooms/{chatId}/unban` | `POST /api/rooms/{chatId}/unban` |

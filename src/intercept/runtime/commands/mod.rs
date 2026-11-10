@@ -22,6 +22,7 @@ pub(super) struct KakaoCommand {
 }
 
 enum KakaoAction {
+    Dialog(noa_agent_protocol::dialog::DialogCommand),
     RequireRichText,
     SendLoco(noa_agent_protocol::loco::SendLocoRequest),
     SendCustom {
@@ -99,6 +100,7 @@ impl KakaoAction {
 
     fn label(&self) -> &'static str {
         match self {
+            Self::Dialog(_) => "오버레이 다이얼로그",
             Self::RequireRichText => "RichText 지원 확인",
             Self::SendLoco(_) => "LOCO 발신",
             Self::SendCustom { .. } => "custom 발신",
@@ -504,4 +506,12 @@ pub async fn react_message(room_id: i64, log_id: i64, link_id: Option<i64>, reac
     tokio::task::spawn_blocking(move || send_command_blocking(room_id, KakaoAction::ReactMessage {log_id, link_id, reaction}))
         .await.map_err(|e| NoaError::Internal(e.to_string()))??;
     Ok(())
+}
+
+pub async fn dialog_command(command: noa_agent_protocol::dialog::DialogCommand) -> Result<Value, NoaError> {
+    command.validate().map_err(NoaError::BadRequest)?;
+    let value = tokio::task::spawn_blocking(move || send_command_blocking(0, KakaoAction::Dialog(command)))
+        .await.map_err(|e| NoaError::Internal(e.to_string()))??
+        .ok_or_else(|| NoaError::AndroidUnavailable("다이얼로그 에이전트 응답이 없습니다".into()))?;
+    serde_json::from_str(&value).map_err(|e| NoaError::AndroidUnavailable(format!("다이얼로그 응답 오류: {e}")))
 }
